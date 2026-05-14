@@ -1,0 +1,11 @@
+{
+  "alpha": 5.0,
+  "flood_threshold": 0.45,
+  "total_routes": 136,
+  "affected_routes": 123,
+  "rerouted_routes": 123,
+  "affected_stops": 1495,
+  "avg_risk_reduction": 0.0531,
+  "avg_extra_time_min": 1.26,
+  "gtfs_rt_feed": "Reports/flood_rerouting_feed.pb"
+}
