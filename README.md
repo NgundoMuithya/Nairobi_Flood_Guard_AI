@@ -213,10 +213,6 @@ The models' ROC curves reinforce this decision with XGBoost achieving the highes
 5. ROUTE OPTIMIZATION
 </h2>
 
-<h2 align='center'>
-4. ROUTE OPTIMIZATION
-</h2>
-
 ### Overview
 
 With the XGBoost model identified as the best performer, its flood probability predictions were used to power a matatu route optimization system for Nairobi. The full implementation is in `Route_Optimization/route_optimization.ipynb` ([here](./Route_Optimization/route_optimization.ipynb)). This section summarises the methodology, key outputs, and findings.
