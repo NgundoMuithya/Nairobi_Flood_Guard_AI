@@ -266,7 +266,7 @@ The route optimization system demonstrates that for the majority of Nairobi's fl
 ---
 
 <h2 align='center'>
-5. CONCLUSION AND RECOMMENDATION
+6. CONCLUSION AND RECOMMENDATION
 </h2>
 
 ### Conclusion
@@ -304,7 +304,7 @@ New contributors should begin by reading `README.md`, then run `notebook.ipynb` 
 ---
 
 <h2 align='center'>
-6. NEXT STEPS
+7. NEXT STEPS
 </h2>
 
 1. Expand the flood label dataset
@@ -322,7 +322,7 @@ New contributors should begin by reading `README.md`, then run `notebook.ipynb` 
 ---
 
 <h2 align='center'>
-7. FOR MORE INFORMATION
+8. FOR MORE INFORMATION
 </h2>
 
 For more information visit the:
