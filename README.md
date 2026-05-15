@@ -6,6 +6,8 @@
 NAIROBI FLOOD GUARD
 </h1>
 
+> **Authors**: Group 4
+
 ---
 
 <h2 align='center'>
@@ -118,4 +120,60 @@ After loading and examining the dataset (checking for null values and duplicates
 
 The not flooded class accounts for ~79% of the data in the dataset. This confirms that the dataset suffers from class imbalance which was addressed.
 
-###
+#### ii) Feature distributions
+
+<img src='./Images/feature_distributions_by_flood_label.png' />
+
+The feature distribution plots reveal that flooded wards receive less rainfall than non-flooded ones suggesting that, at ward scale, rainfall intensity is a weak standalone predictor of flooding. The elevation features show the clearest separation and are better predictors.
+
+#### iii) Correlation heatmap
+
+<img src='./Images/feature_correlation_matrix.png' />
+
+The correlation heatmap confirms the previous observations. Elevation features dominate - `elevation_min_m` and `elevation_mean_m` carry the strongest negative correlations with flooding (-0.50 and -0.50 respectively), followed by `elevation_max_m` (-0.39) and `slope_mean_deg` (-0.26).
+
+All rainfall features correlate weakly with flooding, with `rain_max_daily_mm` showing virtually no linear relationship (-0.001). The heatmap also reveals high inter-correlation between the three elevation features.
+
+#### iv) Top 10 most flooded counties
+
+<img src='./Images/top_10_flooded_counties.png' />
+
+Again, some of the top 10 counties are ones that do not receive a lot of rainfall e.g. Turkana and Garissa. They experience flooding due to their terrain which, during those rare seasons when it does rain, does not allow the water to drain effectively.
+
+#### _Key Takeaway_
+
+The dataset reveals that in Kenya, flooding is primarily a terrain-driven phenomenon at the ward scale. Low-lying wards flood not necessarily because they receive more rain, but because water from surrounding higher ground drains into them. This has implications for the model - terrain features will dominate predictions, and rainfall adds marginal value at this spatial scale.
+
+---
+
+<h2 align='center'>
+4. MODEL BUILDING AND EVALUATION
+</h2>
+
+Four classification model families were independently developed and tuned by the project team, each in its own dedicated notebook located in the `Model/Notebooks/` directory:
+
+a) [Logistic Regression](./Models/Notebooks/logistic_notebook.ipynb) (baseline) - saved [here](./Models/best_log_reg_model.pkl)
+
+b) [Random Forest Classifier](./Models/Notebooks/random_forest_notebook.ipynb) - saved [here](./Models/best_random_forest_model.joblib)
+
+c) [XGBoost Classifier](./Models/Notebooks/XGBoost_notebook.ipynb) - saved [here](./Models/best_xg_boost_model.pkl)
+
+d) [Neural Network](./Models/Notebooks/neural_notebook.ipynb) - saved [here](./Models/best_neural_model.keras)
+
+Each model was iteratively improved through hyperparameter tuning, regularisation, and class imbalance handling before the best version was saved.
+
+The following results were obtained:
+
+### a) Logistic Regression (Baseline)
+
+<img src='./Images/logistic_confusion_matrix.png' />
+
+The baseline logistic regression model did not show strong recall on the flooded class, with more than half of its predicted positives being false positives. It shows strong overall recall by keeping false negatives low. This sets a solid performance floor for the more complex models to beat.
+
+### b) Random Forest Model
+
+<img src='./Images/random_forest_confusion_matrix.png' />
+
+The Random Forest improves on the baseline across all metrics. Its ensemble nature - aggregating predictions from many decision trees - allows it to capture non-linear relationships between terrain features and flood risk that the logistic regression cannot. It currently leads all models evaluated so far.
+
+### c) XGBoost Classifier Model
