@@ -306,3 +306,40 @@ The system flags wards as high-risk at a default probability threshold of 0.45, 
 New contributors should begin by reading `README.md`, then run `notebook.ipynb` for a full project overview. Feature engineering logic is centralised in `Utils/feature_engineering.py` - any changes to features must be reflected there to ensure consistency across the prediction and route optimization pipelines. Individual model notebooks are in `Models/Notebooks/` and can be run independently for retraining or further tuning.
 
 ---
+
+<h2 align='center'>
+6. NEXT STEPS
+</h2>
+
+1. Expand the flood label dataset
+
+2. Incorporate real-time rainfall data
+
+3. Update the GTFS feed
+
+4. Add flood depth estimation
+
+5. Deploy as a live API
+
+6. Conduct ground-truth validation
+
+---
+
+<h2 align='center'>
+7. FOR MORE INFORMATION
+</h2>
+
+For more information visit the:
+
+- [Main Notebook](./notebook.ipynb)
+- [Model Notebooks](./Models/Notebooks/)
+- [Route Optimization Notebook](./Route_Optimization/route_optimization.ipynb)
+- [Presentation](./presentation.pdf)
+
+### _Instructions on how to run the streamlit app_
+
+Ensure you have streamlit installed and then in your terminal run:
+
+```bash
+streamlit run app.py
+```
