@@ -174,6 +174,35 @@ The baseline logistic regression model did not show strong recall on the flooded
 
 <img src='./Images/random_forest_confusion_matrix.png' />
 
-The Random Forest improves on the baseline across all metrics. Its ensemble nature - aggregating predictions from many decision trees - allows it to capture non-linear relationships between terrain features and flood risk that the logistic regression cannot. It currently leads all models evaluated so far.
+The Random Forest improves on the baseline across all metrics. Its ensemble nature - aggregating predictions from many decision trees - allows it to capture non-linear relationships between terrain features and flood risk that the logistic regression cannot.
 
 ### c) XGBoost Classifier Model
+
+<img src='./Images/xgboost_confusion_matrix.png' />
+
+The XGBoost model performs better relative to the Random Forest on this dataset in terms of recall. It also has a high accuracy, precision and f1-score. This is likely attributable to its ensemble nature which, like the Random Forest, allows it to capture non-linear relationships between terrain features and flood risk
+
+### d) Neural Network
+
+<img src='./Images/neural_network_confusion_matrix.png' />
+
+The Neural Network significantly underperforms relative to the Random Forest and XGBoost model. Neural networks typically require large amounts of training data to generalise well - with only 1,450 ward-level samples, the model has limited capacity to learn complex spatial patterns compared to tree-based ensembles.
+
+### _Final Evaluation_
+
+Comparing the metrics of all the models:
+
+| Model          |      AUC | accuracy | precision |   recall | f1-score | support |
+| :------------- | -------: | -------: | --------: | -------: | -------: | ------: |
+| Logistic       |  0.69898 | 0.689655 |   0.60063 | 0.632194 | 0.604335 |     435 |
+| Neural_Network | 0.777919 | 0.737931 |   0.65103 | 0.694622 | 0.661215 |     435 |
+| Random_Forest  | 0.881322 | 0.822989 |  0.742775 | 0.792306 | 0.760649 |     435 |
+| XGBoost        | 0.896913 | 0.813793 |  0.742293 | 0.818291 | 0.762601 |     435 |
+
+The **XGBoost model** achieves some of the highest metrics among all four models
+
+Given that we are looking for the model with the best recall, and, combined with the fact that it has the best AUC and F1-Score, the **XGBoost model** is selected as the final model for flood susceptibility prediction.
+
+The models' ROC curves reinforce this decision with XGBoost achieving the highest AUC (0.9):
+
+<img src='./Images/roc_curves.png' />
