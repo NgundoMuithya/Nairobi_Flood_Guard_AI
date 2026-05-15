@@ -114,7 +114,9 @@ h1, h2, h3, h4 { font-family: 'Syne', sans-serif !important; letter-spacing: -0.
     padding-bottom: 0.5rem; margin-bottom: 1rem; letter-spacing: -0.01em;
 }
 section[data-testid="stSidebar"] { background: #080c14; border-right: 1px solid #1e2d3d; }
-section[data-testid="stSidebar"] * { font-family: 'DM Mono', monospace !important; }
+.material-symbols-rounded, [data-testid="stIconMaterial"] {
+    font-family: 'Material Symbols Rounded' !important;
+}
 .ward-panel {
     background: #0a0f1e; border: 1px solid #1e2d3d;
     border-radius: 4px; padding: 1.25rem; margin-top: 1rem;
@@ -205,7 +207,6 @@ def generate_predictions(_model, _df):
     return _model.predict_proba(X)[:, 1]
 
 
-@st.cache_data
 def build_choropleth(_map_df, centre_lat, centre_lon, zoom):
     """
     Build Folium choropleth using a single GeoJson call on the full
@@ -247,7 +248,7 @@ st.markdown(
     """
 <div class="header-banner">
     <div class="header-title">🌊 Nairobi Flood Guard</div>
-    <div class="header-subtitle">Early Flood Warning & Route Optimization System — Kenya 2024</div>
+    <div class="header-subtitle">Early Flood Warning & Route Optimization System - Kenya</div>
 </div>
 """,
     unsafe_allow_html=True,
