@@ -22,15 +22,14 @@ warnings.filterwarnings("ignore")
 BASE = Path(__file__).parent
 DATA = BASE / "Data"
 MODELS = BASE / "Models"
+GTFS_DIR = DATA / "GTFS_FEED_2019"
 REPORTS = BASE / "Route_Optimization" / "Reports"
 
 FLOODS_GPKG = DATA / "floods.gpkg"
 XGB_MODEL = MODELS / "best_xgboost_model.pkl"
 REROUTING_CSV = REPORTS / "rerouting_summary.csv"
 TRADEOFF_PNG = REPORTS / "rerouting_tradeoff.png"
-FOLIUM_MAP = REPORTS / "flood_rerouting_map.html"
 
-# Nairobi centre coordinates
 NAIROBI_LAT, NAIROBI_LON = -1.286389, 36.817223
 
 FEATURE_COLS = [
@@ -114,6 +113,8 @@ h1, h2, h3, h4 { font-family: 'Syne', sans-serif !important; letter-spacing: -0.
     padding-bottom: 0.5rem; margin-bottom: 1rem; letter-spacing: -0.01em;
 }
 section[data-testid="stSidebar"] { background: #080c14; border-right: 1px solid #1e2d3d; }
+/* Fix: hide the sidebar collapse button tooltip showing 'keyboard_double_arrow_left' */
+[data-testid="stSidebarCollapseButton"] { display: none !important; }
 .material-symbols-rounded, [data-testid="stIconMaterial"] {
     font-family: 'Material Symbols Rounded' !important;
 }
@@ -134,6 +135,18 @@ section[data-testid="stSidebar"] { background: #080c14; border-right: 1px solid 
 div[data-testid="stMetric"] {
     background: #0d1117; border: 1px solid #1e2d3d;
     border-radius: 4px; padding: 0.75rem 1rem;
+}
+.route-stat-card {
+    background: #0d1117; border: 1px solid #1e2d3d;
+    border-radius: 4px; padding: 1rem 1.2rem; text-align: center;
+}
+.route-stat-label {
+    font-size: 0.65rem; color: #6b7c93;
+    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.3rem;
+}
+.route-stat-value {
+    font-family: 'Syne', sans-serif; font-size: 1.3rem;
+    font-weight: 700; color: #e2e8f0;
 }
 </style>
 """,
@@ -162,23 +175,6 @@ def risk_color(prob: float) -> str:
     return "#4ade80"
 
 
-def recenter_folium_html(html: str, lat: float, lon: float, zoom: int = 12) -> str:
-    """Inject JS to re-centre a saved Folium map on the given coordinates."""
-    inject = f"""
-    <script>
-    document.addEventListener("DOMContentLoaded", function() {{
-        setTimeout(function() {{
-            var maps = Object.values(window).filter(function(v) {{
-                return v && typeof v === 'object' && typeof v.setView === 'function';
-            }});
-            if (maps.length > 0) {{ maps[0].setView([{lat}, {lon}], {zoom}); }}
-        }}, 300);
-    }});
-    </script>
-    """
-    return html.replace("</body>", inject + "</body>")
-
-
 # ── Data loading ──────────────────────────────────────────────────────────────
 @st.cache_data
 def load_data():
@@ -202,24 +198,28 @@ def load_rerouting():
 
 
 @st.cache_data
+def load_gtfs():
+    routes = pd.read_csv(GTFS_DIR / "routes.txt")
+    trips = pd.read_csv(GTFS_DIR / "trips.txt")
+    shapes = pd.read_csv(GTFS_DIR / "shapes.txt")
+    stops = pd.read_csv(GTFS_DIR / "stops.txt")
+    stop_times = pd.read_csv(GTFS_DIR / "stop_times.txt")
+    return routes, trips, shapes, stops, stop_times
+
+
+@st.cache_data
 def generate_predictions(_model, _df):
     X = _df[FEATURE_COLS].fillna(_df[FEATURE_COLS].median())
     return _model.predict_proba(X)[:, 1]
 
 
-def build_choropleth(_map_df, centre_lat, centre_lon, zoom):
-    """
-    Build Folium choropleth using a single GeoJson call on the full
-    GeoDataFrame — avoids the slow iterrows() loop that caused the dashboard
-    to appear frozen.
-    """
+# Build choropleth — not cached since Folium maps with lambdas can't be pickled
+def build_choropleth(map_df, centre_lat, centre_lon, zoom):
     fmap = folium.Map(
         location=[centre_lat, centre_lon], zoom_start=zoom, tiles="CartoDB dark_matter"
     )
     folium.GeoJson(
-        _map_df[
-            ["ward", "subcounty", "county", "flood_prob", "risk_label", "geometry"]
-        ],
+        map_df[["ward", "subcounty", "county", "flood_prob", "risk_label", "geometry"]],
         style_function=lambda feature: {
             "fillColor": risk_color(float(feature["properties"]["flood_prob"])),
             "fillOpacity": 0.55,
@@ -234,6 +234,42 @@ def build_choropleth(_map_df, centre_lat, centre_lon, zoom):
         ),
     ).add_to(fmap)
     return fmap
+
+
+def get_route_shape(route_id, trips, shapes):
+    """Return list of [lat, lon] for the first trip of a route."""
+    trip_rows = trips[trips["route_id"] == route_id]
+    if trip_rows.empty:
+        return []
+    shape_id = trip_rows.iloc[0]["shape_id"]
+    pts = shapes[shapes["shape_id"] == shape_id].sort_values("shape_pt_sequence")
+    return [[row["shape_pt_lat"], row["shape_pt_lon"]] for _, row in pts.iterrows()]
+
+
+def get_route_stops(route_id, trips, stop_times, stops):
+    """Return GeoDataFrame of stops for the first trip of a route."""
+    trip_rows = trips[trips["route_id"] == route_id]
+    if trip_rows.empty:
+        return pd.DataFrame()
+    trip_id = trip_rows.iloc[0]["trip_id"]
+    ordered = (
+        stop_times[stop_times["trip_id"] == trip_id]
+        .sort_values("stop_sequence")
+        .merge(stops, on="stop_id")
+    )
+    return ordered
+
+
+def get_affected_stop_ids(nairobi_df, stops_df, threshold):
+    """Return set of stop_ids whose coordinates fall inside high-risk Nairobi wards."""
+    high_risk = nairobi_df[nairobi_df["flood_prob"] >= threshold][["geometry"]].copy()
+    stops_gdf = gpd.GeoDataFrame(
+        stops_df,
+        geometry=gpd.points_from_xy(stops_df["stop_lon"], stops_df["stop_lat"]),
+        crs="EPSG:4326",
+    )
+    joined = gpd.sjoin(stops_gdf, high_risk, how="inner", predicate="within")
+    return set(joined["stop_id"].tolist())
 
 
 # ── Load everything ───────────────────────────────────────────────────────────
@@ -549,105 +585,312 @@ elif page == "Route Optimization":
     route. The GTFS-RT feed generated is immediately consumable by transit apps.
     """)
 
-    if REROUTING_CSV.exists():
-        rerouting_df = load_rerouting()
-
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.metric("Affected Routes", len(rerouting_df))
-        with c2:
-            st.metric(
-                "Avg Risk Reduction", f"{rerouting_df['risk_reduction'].mean():.3f}"
-            )
-        with c3:
-            st.metric(
-                "Avg Extra Time", f"{rerouting_df['extra_time_min'].mean():.1f} min"
-            )
-        with c4:
-            st.metric(
-                "Routes Improved", int((rerouting_df["risk_reduction"] > 0).sum())
-            )
-
-        st.markdown(
-            '<div class="section-header" style="margin-top:1.5rem">Rerouting Summary</div>',
-            unsafe_allow_html=True,
-        )
-        sort_col = st.selectbox(
-            "Sort by",
-            [
-                "risk_reduction",
-                "extra_time_min",
-                "original_flood_prob",
-                "alternative_flood_prob",
-            ],
-            format_func=lambda x: x.replace("_", " ").title(),
-        )
-        display_df = (
-            rerouting_df[
-                [
-                    "route_id",
-                    "origin",
-                    "destination",
-                    "original_flood_prob",
-                    "alternative_flood_prob",
-                    "risk_reduction",
-                    "extra_time_min",
-                ]
-            ]
-            .sort_values(sort_col, ascending=False)
-            .reset_index(drop=True)
-        )
-        display_df.index += 1
-        display_df.columns = [
-            "Route ID",
-            "Origin",
-            "Destination",
-            "Original Risk",
-            "Alternative Risk",
-            "Risk Reduction",
-            "Extra Time (min)",
-        ]
-        st.dataframe(display_df, use_container_width=True)
-
-        st.download_button(
-            label="⬇ Download Rerouting CSV",
-            data=rerouting_df.to_csv(index=False),
-            file_name="rerouting_summary.csv",
-            mime="text/csv",
-        )
-
-        st.markdown(
-            '<div class="section-header" style="margin-top:1.5rem">Risk-Time Tradeoff</div>',
-            unsafe_allow_html=True,
-        )
-        if TRADEOFF_PNG.exists():
-            st.image(str(TRADEOFF_PNG), width="content")
-        else:
-            st.info(
-                "Tradeoff chart not found. Run route_optimization.ipynb to generate it."
-            )
-    else:
+    if not REROUTING_CSV.exists():
         st.warning(
             "Rerouting summary not found. Run Route_Optimization/route_optimization.ipynb first."
         )
+        st.stop()
 
-    # Folium map — re-centred on Nairobi via JS injection
+    rerouting_df = load_rerouting()
+    routes, trips, shapes, stops, stop_times = load_gtfs()
+
+    # ── Summary metrics ───────────────────────────────────────────────────────
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Affected Routes", len(rerouting_df))
+    with c2:
+        st.metric("Avg Risk Reduction", f"{rerouting_df['risk_reduction'].mean():.3f}")
+    with c3:
+        st.metric("Avg Extra Time", f"{rerouting_df['extra_time_min'].mean():.1f} min")
+    with c4:
+        st.metric("Routes Improved", int((rerouting_df["risk_reduction"] > 0).sum()))
+
+    # ── Rerouting summary table ───────────────────────────────────────────────
     st.markdown(
-        '<div class="section-header" style="margin-top:1.5rem">Interactive Route Map</div>',
+        '<div class="section-header" style="margin-top:1.5rem">Rerouting Summary</div>',
         unsafe_allow_html=True,
     )
-    st.caption(
-        "Original routes shown in blue · Alternative routes shown in dashed orange · Affected stops in red"
+    sort_col = st.selectbox(
+        "Sort by",
+        [
+            "risk_reduction",
+            "extra_time_min",
+            "original_flood_prob",
+            "alternative_flood_prob",
+        ],
+        format_func=lambda x: x.replace("_", " ").title(),
     )
-    if FOLIUM_MAP.exists():
-        with open(FOLIUM_MAP, "r", encoding="utf-8") as f:
-            map_html = f.read()
-        map_html = recenter_folium_html(map_html, NAIROBI_LAT, NAIROBI_LON, zoom=12)
-        st.components.v1.html(map_html, height=560, scrolling=False)
+    display_df = (
+        rerouting_df[
+            [
+                "route_id",
+                "origin",
+                "destination",
+                "original_flood_prob",
+                "alternative_flood_prob",
+                "risk_reduction",
+                "extra_time_min",
+            ]
+        ]
+        .sort_values(sort_col, ascending=False)
+        .reset_index(drop=True)
+    )
+    display_df.index += 1
+    display_df.columns = [
+        "Route ID",
+        "Origin",
+        "Destination",
+        "Original Risk",
+        "Alternative Risk",
+        "Risk Reduction",
+        "Extra Time (min)",
+    ]
+    st.dataframe(display_df, use_container_width=True)
+    st.download_button(
+        label="⬇ Download Rerouting CSV",
+        data=rerouting_df.to_csv(index=False),
+        file_name="rerouting_summary.csv",
+        mime="text/csv",
+    )
+
+    # ── Tradeoff chart ────────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="section-header" style="margin-top:1.5rem">Risk-Time Tradeoff</div>',
+        unsafe_allow_html=True,
+    )
+    if TRADEOFF_PNG.exists():
+        st.image(str(TRADEOFF_PNG), width="content")
     else:
         st.info(
-            "Folium map not found. Run Route_Optimization/route_optimization.ipynb to generate it."
+            "Tradeoff chart not found. Run route_optimization.ipynb to generate it."
         )
+
+    # ── Interactive map section ───────────────────────────────────────────────
+    st.markdown(
+        '<div class="section-header" style="margin-top:1.5rem">Interactive Map</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Toggle between the two views
+    map_view = st.radio(
+        "View",
+        ["🗺 Flood Risk Map", "🚌 Route Explorer"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+    # ── VIEW 1: Flood Risk Map ────────────────────────────────────────────────
+    if map_view == "🗺 Flood Risk Map":
+        st.caption("Nairobi ward flood risk · hover a ward for details")
+        with st.spinner("Rendering flood risk map..."):
+            risk_map = build_choropleth(nairobi, NAIROBI_LAT, NAIROBI_LON, zoom=11)
+        st_folium(risk_map, use_container_width=True, height=520)
+
+    # ── VIEW 2: Route Explorer ────────────────────────────────────────────────
+    else:
+        # Compute affected stop ids once
+        affected_stop_ids = get_affected_stop_ids(nairobi, stops, threshold)
+
+        # Route navigator — previous / next buttons + route label
+        affected_route_ids = rerouting_df["route_id"].tolist()
+        n_routes = len(affected_route_ids)
+
+        if "route_idx" not in st.session_state:
+            st.session_state.route_idx = 0
+
+        nav_left, nav_centre, nav_right = st.columns([1, 4, 1])
+
+        with nav_left:
+            if st.button("← Previous", use_container_width=True):
+                st.session_state.route_idx = (st.session_state.route_idx - 1) % n_routes
+
+        with nav_right:
+            if st.button("Next →", use_container_width=True):
+                st.session_state.route_idx = (st.session_state.route_idx + 1) % n_routes
+
+        idx = st.session_state.route_idx
+        route_row = rerouting_df.iloc[idx]
+        route_id = route_row["route_id"]
+
+        with nav_centre:
+            st.markdown(
+                f"<div style='text-align:center;padding:0.4rem 0;'>"
+                f"<span style='font-family:Syne,sans-serif;font-size:1rem;font-weight:700;"
+                f"color:#e2e8f0;'>Route {route_id}</span>"
+                f"<span style='font-size:0.72rem;color:#4a6080;margin-left:0.6rem;'>"
+                f"{route_row['origin']} → {route_row['destination']}</span>"
+                f"<span style='font-size:0.65rem;color:#4a5568;margin-left:0.6rem;'>"
+                f"({idx + 1} / {n_routes})</span></div>",
+                unsafe_allow_html=True,
+            )
+
+        # Route stats row
+        s1, s2, s3, s4 = st.columns(4)
+        with s1:
+            st.markdown(
+                f"""
+            <div class="route-stat-card">
+                <div class="route-stat-label">Original Flood Risk</div>
+                <div class="route-stat-value" style="color:#f87171;">
+                    {route_row['original_flood_prob']:.1%}
+                </div>
+            </div>""",
+                unsafe_allow_html=True,
+            )
+        with s2:
+            st.markdown(
+                f"""
+            <div class="route-stat-card">
+                <div class="route-stat-label">Alternative Flood Risk</div>
+                <div class="route-stat-value" style="color:#4ade80;">
+                    {route_row['alternative_flood_prob']:.1%}
+                </div>
+            </div>""",
+                unsafe_allow_html=True,
+            )
+        with s3:
+            st.markdown(
+                f"""
+            <div class="route-stat-card">
+                <div class="route-stat-label">Risk Reduction</div>
+                <div class="route-stat-value" style="color:#1a6fc4;">
+                    {route_row['risk_reduction']:.3f}
+                </div>
+            </div>""",
+                unsafe_allow_html=True,
+            )
+        with s4:
+            st.markdown(
+                f"""
+            <div class="route-stat-card">
+                <div class="route-stat-label">Extra Travel Time</div>
+                <div class="route-stat-value" style="color:#fbbf24;">
+                    +{route_row['extra_time_min']:.1f} min
+                </div>
+            </div>""",
+                unsafe_allow_html=True,
+            )
+
+        # Original / Alternative toggle
+        st.markdown("<div style='margin-top:0.75rem'></div>", unsafe_allow_html=True)
+        route_view = st.radio(
+            "Route view",
+            ["Original Route", "Alternative Route"],
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+
+        # Build the route map
+        route_map = folium.Map(
+            location=[NAIROBI_LAT, NAIROBI_LON],
+            zoom_start=12,
+            tiles="CartoDB dark_matter",
+        )
+
+        route_coords = get_route_shape(route_id, trips, shapes)
+        route_stops = get_route_stops(route_id, trips, stop_times, stops)
+
+        if route_view == "Original Route":
+            st.caption(
+                "🔵 Original route path · 🔴 Affected stops (in flood-risk wards) · "
+                "⚪ Safe stops"
+            )
+            # Draw original route shape in blue
+            if route_coords:
+                folium.PolyLine(
+                    route_coords,
+                    color="#378ADD",
+                    weight=4,
+                    opacity=0.9,
+                    tooltip=f"Route {route_id} — Original",
+                ).add_to(route_map)
+
+            # Draw stops — red if affected, grey if safe
+            if not route_stops.empty:
+                for _, stop_row in route_stops.iterrows():
+                    is_affected = stop_row["stop_id"] in affected_stop_ids
+                    folium.CircleMarker(
+                        location=[stop_row["stop_lat"], stop_row["stop_lon"]],
+                        radius=5 if is_affected else 3,
+                        color="#f87171" if is_affected else "#4a5568",
+                        fill=True,
+                        fill_color="#f87171" if is_affected else "#4a5568",
+                        fill_opacity=0.9,
+                        tooltip=(
+                            f"⚠ Affected: {stop_row.get('stop_name', stop_row['stop_id'])}"
+                            if is_affected
+                            else str(stop_row.get("stop_name", stop_row["stop_id"]))
+                        ),
+                    ).add_to(route_map)
+
+            # Auto-fit to route bounds if we have coordinates
+            if route_coords:
+                lats = [c[0] for c in route_coords]
+                lons = [c[1] for c in route_coords]
+                route_map.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
+
+        else:  # Alternative Route
+            st.caption(
+                "🟠 Alternative route avoids all 🔴 affected stops · "
+                "risk reduced by {:.3f} · extra time +{:.1f} min".format(
+                    route_row["risk_reduction"], route_row["extra_time_min"]
+                )
+            )
+            # Draw original in faded blue for reference
+            if route_coords:
+                folium.PolyLine(
+                    route_coords,
+                    color="#1e3a5f",
+                    weight=3,
+                    opacity=0.4,
+                    tooltip=f"Route {route_id} — Original (reference)",
+                    dash_array="6",
+                ).add_to(route_map)
+
+            # Draw stops — red (affected, to be avoided) or grey (safe)
+            if not route_stops.empty:
+                for _, stop_row in route_stops.iterrows():
+                    is_affected = stop_row["stop_id"] in affected_stop_ids
+                    folium.CircleMarker(
+                        location=[stop_row["stop_lat"], stop_row["stop_lon"]],
+                        radius=5 if is_affected else 3,
+                        color="#f87171" if is_affected else "#2d3748",
+                        fill=True,
+                        fill_color="#f87171" if is_affected else "#2d3748",
+                        fill_opacity=0.85,
+                        tooltip=(
+                            f"🚫 Skipped: {stop_row.get('stop_name', stop_row['stop_id'])}"
+                            if is_affected
+                            else str(stop_row.get("stop_name", stop_row["stop_id"]))
+                        ),
+                    ).add_to(route_map)
+
+            # Alternative route info banner (no geometry available — show stats panel)
+            if route_coords:
+                lats = [c[0] for c in route_coords]
+                lons = [c[1] for c in route_coords]
+                route_map.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
+
+            # Annotate map with an info marker at the route midpoint
+            if route_coords:
+                mid = route_coords[len(route_coords) // 2]
+                folium.Marker(
+                    location=mid,
+                    icon=folium.DivIcon(
+                        html=f"""
+                        <div style="background:#0d2137;border:1px solid #1a6fc4;
+                                    border-radius:4px;padding:4px 8px;
+                                    font-family:monospace;font-size:11px;
+                                    color:#e2e8f0;white-space:nowrap;">
+                            Alternative path · Risk ↓{route_row['risk_reduction']:.3f}
+                            · +{route_row['extra_time_min']:.1f} min
+                        </div>""",
+                        icon_size=(260, 30),
+                        icon_anchor=(130, 15),
+                    ),
+                ).add_to(route_map)
+
+        st_folium(route_map, use_container_width=True, height=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -682,7 +925,6 @@ elif page == "Model Performance":
     )
     st.dataframe(styled, use_container_width=True)
 
-    # Feature importance — access classifier inside the pipeline via named_steps
     st.markdown(
         '<div class="section-header" style="margin-top:1.5rem">Feature Importance (XGBoost)</div>',
         unsafe_allow_html=True,
@@ -690,7 +932,6 @@ elif page == "Model Performance":
     try:
         classifier = model.named_steps["classifier"]
         importances = classifier.feature_importances_
-
         feat_imp = pd.DataFrame(
             {"Feature": FEATURE_COLS, "Importance": importances}
         ).sort_values("Importance", ascending=True)
@@ -715,7 +956,6 @@ elif page == "Model Performance":
             height=380,
         )
         st.plotly_chart(fig, use_container_width=True)
-
     except KeyError:
         st.warning(
             "Could not find 'classifier' step in the pipeline. "
