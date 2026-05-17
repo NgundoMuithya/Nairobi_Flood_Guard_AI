@@ -9,3 +9,4 @@ cache/
 # Exploratory notebooks
 feature_engineering.ipynb
 inspect.ipynb
+.streamlit/secrets.toml
