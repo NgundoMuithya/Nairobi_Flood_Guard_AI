@@ -9,3 +9,6 @@ cache/
 # Exploratory notebooks
 feature_engineering.ipynb
 inspect.ipynb
+
+# API Key
+.streamlit/

@@ -1,30 +1,34 @@
 """
-Nairobi Flood Guard — Streamlit UI
+Nairobi Flood Guard - Streamlit UI
 Run with: streamlit run app.py
 """
 
 import warnings
 import json
 import pickle
+import base64
 from pathlib import Path
 
 import pandas as pd
 import geopandas as gpd
 import folium
 import streamlit as st
+import streamlit.components.v1 as components
 from streamlit_folium import st_folium
+from groq import Groq
 import plotly.express as px
 import plotly.graph_objects as go
 
 warnings.filterwarnings("ignore")
 
 
-# ── Paths ────────────────────────────────────────────────────────────────────
+# -- Paths --------------------------------------------------------------------
 BASE = Path(__file__).parent
 DATA = BASE / "Data"
 MODELS = BASE / "Models"
 GTFS_DIR = DATA / "GTFS_FEED_2019"
 REPORTS = BASE / "Route_Optimization" / "Reports"
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 FLOODS_GPKG = DATA / "floods.gpkg"
 XGB_MODEL = MODELS / "best_xgboost_model.pkl"
@@ -46,7 +50,7 @@ FEATURE_COLS = [
     "slope_mean_deg",
 ]
 
-# ── Page config ───────────────────────────────────────────────────────────────
+# -- Page config --------------------------------------------------------------
 st.set_page_config(
     page_title="Nairobi Flood Guard",
     page_icon="🌊",
@@ -54,7 +58,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
+# -- Custom CSS ---------------------------------------------------------------
 st.markdown(
     """
 <style>
@@ -115,7 +119,6 @@ h1, h2, h3, h4 { font-family: 'Syne', sans-serif !important; letter-spacing: -0.
     padding-bottom: 0.5rem; margin-bottom: 1rem; letter-spacing: -0.01em;
 }
 section[data-testid="stSidebar"] { background: #080c14; border-right: 1px solid #1e2d3d; }
-/* Fix: hide the sidebar collapse button tooltip showing 'keyboard_double_arrow_left' */
 [data-testid="stSidebarCollapseButton"] { display: none !important; }
 .material-symbols-rounded, [data-testid="stIconMaterial"] {
     font-family: 'Material Symbols Rounded' !important;
@@ -156,7 +159,7 @@ div[data-testid="stMetric"] {
 )
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# -- Helpers ------------------------------------------------------------------
 def risk_label(prob: float) -> tuple[str, str]:
     if prob >= 0.70:
         return "Critical", "badge-critical"
@@ -177,7 +180,86 @@ def risk_color(prob: float) -> str:
     return "#4ade80"
 
 
-# ── Data loading ──────────────────────────────────────────────────────────────
+def normalize(col: str, df: pd.DataFrame) -> pd.Series:
+    """Min-max normalise a DataFrame column to [0, 1]."""
+    mn, mx = df[col].min(), df[col].max()
+    return (df[col] - mn) / (mx - mn + 1e-9)
+
+
+def highlight_best(s: pd.Series) -> list[str]:
+    """Highlight the highest value in each column of the metrics table."""
+    is_best = s == s.max()
+    return [
+        "background-color: #0d2137; color: #4ade80; font-weight:600" if v else ""
+        for v in is_best
+    ]
+
+
+def render_message(role: str, content: str) -> None:
+    """
+    Render a chat message bubble with a clipboard icon that appears on hover.
+    Content is base64-encoded to avoid all quote/backtick escaping issues.
+    """
+    b64 = base64.b64encode(content.encode("utf-8")).decode("utf-8")
+    icon_color = "#4a6080"
+    icon_hover = "#1a6fc4"
+    align = "flex-end" if role == "user" else "flex-start"
+    bubble_bg = "#0d1a2d" if role == "user" else "#0d1117"
+    border_col = "#1a6fc4" if role == "user" else "#1e2d3d"
+    avatar = "👤" if role == "user" else "🤖"
+    btn_side = "left" if role == "user" else "right"
+
+    html = f"""
+<div style="display:flex; flex-direction:column; align-items:{align};
+            margin-bottom:0.75rem; width:100%;">
+  <div style="display:flex; align-items:flex-start; gap:0.5rem;
+              flex-direction:{'row-reverse' if role == 'user' else 'row'}">
+    <span style="font-size:1.2rem; margin-top:0.2rem;">{avatar}</span>
+    <div class="msg-wrapper" style="position:relative; max-width:85%;">
+      <div style="background:{bubble_bg}; border:1px solid {border_col};
+                  border-radius:6px; padding:0.75rem 1rem;
+                  font-family:'DM Mono',monospace; font-size:0.85rem;
+                  color:#e2e8f0; line-height:1.6; white-space:pre-wrap;
+                  word-break:break-word;">{content}</div>
+      <button
+        data-content="{b64}"
+        onclick="
+          var text = atob(this.getAttribute('data-content'));
+          navigator.clipboard.writeText(text).then(() => {{
+            var icon = this.querySelector('.icon-default');
+            var check = this.querySelector('.icon-check');
+            icon.style.display = 'none';
+            check.style.display = 'inline';
+            setTimeout(() => {{
+              icon.style.display = 'inline';
+              check.style.display = 'none';
+            }}, 1500);
+          }});
+        "
+        onmouseenter="this.style.color='{icon_hover}';this.style.borderColor='{icon_hover}';"
+        onmouseleave="this.style.color='{icon_color}';this.style.borderColor='transparent';"
+        style="position:absolute; top:0.4rem; {btn_side}:-2.2rem;
+               background:transparent; border:1px solid transparent;
+               border-radius:4px; padding:0.2rem 0.3rem;
+               color:{icon_color}; cursor:pointer;
+               font-size:0.9rem; line-height:1;
+               opacity:0; transition:opacity 0.15s ease;"
+        class="copy-icon-btn"
+        title="Copy to clipboard">
+        <span class="icon-default">📋</span>
+        <span class="icon-check" style="display:none;">✓</span>
+      </button>
+    </div>
+  </div>
+</div>
+<style>
+  .msg-wrapper:hover .copy-icon-btn {{ opacity: 1 !important; }}
+</style>
+"""
+    components.html(html, height=max(80, len(content) // 3 + 80), scrolling=False)
+
+
+# -- Data loading -------------------------------------------------------------
 @st.cache_data
 def load_data():
     df = gpd.read_file(FLOODS_GPKG)
@@ -197,6 +279,11 @@ def load_model():
 @st.cache_data
 def load_rerouting():
     return pd.read_csv(REROUTING_CSV)
+
+
+@st.cache_resource
+def get_groq_client():
+    return Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 
 @st.cache_data
@@ -223,10 +310,12 @@ def generate_predictions(_model, _df):
     return _model.predict_proba(X)[:, 1]
 
 
-# Build choropleth — not cached since Folium maps with lambdas can't be pickled
+# Build choropleth - not cached since Folium maps with lambdas can't be pickled
 def build_choropleth(map_df, centre_lat, centre_lon, zoom):
     fmap = folium.Map(
-        location=[centre_lat, centre_lon], zoom_start=zoom, tiles="CartoDB dark_matter"
+        location=[centre_lat, centre_lon],
+        zoom_start=zoom,
+        tiles="CartoDB dark_matter",
     )
     folium.GeoJson(
         map_df[["ward", "subcounty", "county", "flood_prob", "risk_label", "geometry"]],
@@ -257,22 +346,23 @@ def get_route_shape(route_id, trips, shapes):
 
 
 def get_route_stops(route_id, trips, stop_times, stops):
-    """Return GeoDataFrame of stops for the first trip of a route."""
+    """Return DataFrame of stops for the first trip of a route."""
     trip_rows = trips[trips["route_id"] == route_id]
     if trip_rows.empty:
         return pd.DataFrame()
     trip_id = trip_rows.iloc[0]["trip_id"]
-    ordered = (
+    return (
         stop_times[stop_times["trip_id"] == trip_id]
         .sort_values("stop_sequence")
         .merge(stops, on="stop_id")
     )
-    return ordered
 
 
-def get_affected_stop_ids(nairobi_df, stops_df, threshold):
-    """Return set of stop_ids whose coordinates fall inside high-risk Nairobi wards."""
-    high_risk = nairobi_df[nairobi_df["flood_prob"] >= threshold][["geometry"]].copy()
+def get_affected_stop_ids(nairobi_df, stops_df, flood_threshold):
+    """Return set of stop_ids falling inside high-risk Nairobi wards."""
+    high_risk = nairobi_df[nairobi_df["flood_prob"] >= flood_threshold][
+        ["geometry"]
+    ].copy()
     stops_gdf = gpd.GeoDataFrame(
         stops_df,
         geometry=gpd.points_from_xy(stops_df["stop_lon"], stops_df["stop_lat"]),
@@ -282,25 +372,25 @@ def get_affected_stop_ids(nairobi_df, stops_df, threshold):
     return set(joined["stop_id"].tolist())
 
 
-# ── Load everything ───────────────────────────────────────────────────────────
+# -- Load everything ----------------------------------------------------------
 df = load_data()
 model = load_model()
 df["flood_prob"] = generate_predictions(model, df)
 df["risk_label"], _ = zip(*df["flood_prob"].map(risk_label))
 nairobi = df[df["county"].str.lower() == "nairobi"].copy()
 
-# ── Header ────────────────────────────────────────────────────────────────────
+# -- Header -------------------------------------------------------------------
 st.markdown(
     """
 <div class="header-banner">
     <div class="header-title">🌊 Nairobi Flood Guard</div>
-    <div class="header-subtitle">Early Flood Warning & Route Optimization System - Kenya</div>
+    <div class="header-subtitle">Early Flood Warning &amp; Route Optimization System - Kenya</div>
 </div>
 """,
     unsafe_allow_html=True,
 )
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+# -- Sidebar ------------------------------------------------------------------
 with st.sidebar:
     st.markdown("### Navigation")
     page = st.radio(
@@ -310,6 +400,7 @@ with st.sidebar:
             "Ward Lookup",
             "Route Optimization",
             "Model Performance",
+            "AI Assistant",
         ],
         label_visibility="collapsed",
     )
@@ -335,15 +426,16 @@ with st.sidebar:
     st.metric("Above Threshold", int(n_total))
     st.markdown("---")
     st.markdown(
-        "<span style='font-size:0.65rem;color:#4a5568;'>Model: XGBoost · Data: UNOSAT April 2024 · "
-        "Terrain: SRTM 90m · Rainfall: CHIRPS Feb–Apr 2024</span>",
+        "<span style='font-size:0.65rem;color:#4a5568;'>Model: XGBoost · "
+        "Data: UNOSAT April 2024 · Terrain: SRTM 90m · "
+        "Rainfall: CHIRPS Feb-Apr 2024</span>",
         unsafe_allow_html=True,
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PAGE 1 — FLOOD RISK DASHBOARD
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# PAGE 1 - FLOOD RISK DASHBOARD
+# =============================================================================
 if page == "Flood Risk Dashboard":
 
     st.markdown(
@@ -411,7 +503,8 @@ if page == "Flood Risk Dashboard":
     st.plotly_chart(fig, use_container_width=True)
 
     st.markdown(
-        '<div class="section-header">Highest Risk Wards</div>', unsafe_allow_html=True
+        '<div class="section-header">Highest Risk Wards</div>',
+        unsafe_allow_html=True,
     )
     top10 = (
         map_df[["ward", "subcounty", "county", "flood_prob", "risk_label"]]
@@ -435,9 +528,9 @@ if page == "Flood Risk Dashboard":
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PAGE 2 — WARD LOOKUP
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# PAGE 2 - WARD LOOKUP
+# =============================================================================
 elif page == "Ward Lookup":
 
     st.markdown(
@@ -513,15 +606,11 @@ elif page == "Ward Lookup":
         "Population",
     ]
 
-    def normalize(col):
-        mn, mx = df[col].min(), df[col].max()
-        return (df[col] - mn) / (mx - mn + 1e-9)
-
     ward_vals = [
-        float(normalize(c)[df["ward"] == selected_ward].values[0])
+        float(normalize(c, df)[df["ward"] == selected_ward].values[0])
         for c in features_for_radar
     ]
-    avg_vals = [float(normalize(c).mean()) for c in features_for_radar]
+    avg_vals = [float(normalize(c, df).mean()) for c in features_for_radar]
 
     fig = go.Figure()
     fig.add_trace(
@@ -574,30 +663,32 @@ elif page == "Ward Lookup":
             "color": risk_color(prob),
             "weight": 2,
         },
-        tooltip=f"{selected_ward} — {prob:.1%} flood probability",
+        tooltip=f"{selected_ward} - {prob:.1%} flood probability",
     ).add_to(mini_map)
     st_folium(mini_map, use_container_width=True, height=320)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PAGE 3 — ROUTE OPTIMIZATION
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# PAGE 3 - ROUTE OPTIMIZATION
+# =============================================================================
 elif page == "Route Optimization":
 
     st.markdown(
-        '<div class="section-header">Matatu Route Optimization — April 2024 Flood Event</div>',
+        '<div class="section-header">Matatu Route Optimization - April 2024 Flood Event</div>',
         unsafe_allow_html=True,
     )
-    st.markdown("""
-    The route optimization system uses XGBoost flood predictions to identify which Nairobi
-    matatu routes pass through high-risk wards. Flooded road segments are blocked outright
-    and Dijkstra's algorithm finds the safest available alternative path for each affected
-    route. The GTFS-RT feed generated is immediately consumable by transit apps.
-    """)
+    st.markdown(
+        "The route optimization system uses XGBoost flood predictions to identify which "
+        "Nairobi matatu routes pass through high-risk wards. Flooded road segments are "
+        "blocked outright and Dijkstra's algorithm finds the safest available alternative "
+        "path for each affected route. The GTFS-RT feed generated is immediately "
+        "consumable by transit apps."
+    )
 
     if not REROUTING_CSV.exists():
         st.warning(
-            "Rerouting summary not found. Run Route_Optimization/route_optimization.ipynb first."
+            "Rerouting summary not found. "
+            "Run Route_Optimization/route_optimization.ipynb first."
         )
         st.stop()
 
@@ -605,7 +696,7 @@ elif page == "Route Optimization":
     routes, trips, shapes, stops, stop_times = load_gtfs()
     route_geoms = load_route_geometries()
 
-    # ── Summary metrics ───────────────────────────────────────────────────────
+    # Summary metrics
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.metric("Affected Routes", len(rerouting_df))
@@ -616,7 +707,7 @@ elif page == "Route Optimization":
     with c4:
         st.metric("Routes Improved", int((rerouting_df["risk_reduction"] > 0).sum()))
 
-    # ── Rerouting summary table ───────────────────────────────────────────────
+    # Rerouting summary table
     st.markdown(
         '<div class="section-header" style="margin-top:1.5rem">Rerouting Summary</div>',
         unsafe_allow_html=True,
@@ -664,25 +755,23 @@ elif page == "Route Optimization":
         mime="text/csv",
     )
 
-    # ── Tradeoff chart ────────────────────────────────────────────────────────
+    # Tradeoff chart
     st.markdown(
         '<div class="section-header" style="margin-top:1.5rem">Risk-Time Tradeoff</div>',
         unsafe_allow_html=True,
     )
     if TRADEOFF_PNG.exists():
-        st.image(str(TRADEOFF_PNG), width="content")
+        st.image(str(TRADEOFF_PNG), use_container_width=True)
     else:
         st.info(
             "Tradeoff chart not found. Run route_optimization.ipynb to generate it."
         )
 
-    # ── Interactive map section ───────────────────────────────────────────────
+    # Interactive map section
     st.markdown(
         '<div class="section-header" style="margin-top:1.5rem">Interactive Map</div>',
         unsafe_allow_html=True,
     )
-
-    # Toggle between the two views
     map_view = st.radio(
         "View",
         ["🗺 Flood Risk Map", "🚌 Route Explorer"],
@@ -690,19 +779,14 @@ elif page == "Route Optimization":
         label_visibility="collapsed",
     )
 
-    # ── VIEW 1: Flood Risk Map ────────────────────────────────────────────────
     if map_view == "🗺 Flood Risk Map":
         st.caption("Nairobi ward flood risk · hover a ward for details")
         with st.spinner("Rendering flood risk map..."):
             risk_map = build_choropleth(nairobi, NAIROBI_LAT, NAIROBI_LON, zoom=11)
         st_folium(risk_map, use_container_width=True, height=520)
 
-    # ── VIEW 2: Route Explorer ────────────────────────────────────────────────
     else:
-        # Compute affected stop ids once
         affected_stop_ids = get_affected_stop_ids(nairobi, stops, threshold)
-
-        # Route navigator — previous / next buttons + route label
         affected_route_ids = rerouting_df["route_id"].tolist()
         n_routes = len(affected_route_ids)
 
@@ -726,8 +810,8 @@ elif page == "Route Optimization":
         with nav_centre:
             st.markdown(
                 f"<div style='text-align:center;padding:0.4rem 0;'>"
-                f"<span style='font-family:Syne,sans-serif;font-size:1rem;font-weight:700;"
-                f"color:#e2e8f0;'>Route {route_id}</span>"
+                f"<span style='font-family:Syne,sans-serif;font-size:1rem;"
+                f"font-weight:700;color:#e2e8f0;'>Route {route_id}</span>"
                 f"<span style='font-size:0.72rem;color:#4a6080;margin-left:0.6rem;'>"
                 f"{route_row['origin']} → {route_row['destination']}</span>"
                 f"<span style='font-size:0.65rem;color:#4a5568;margin-left:0.6rem;'>"
@@ -735,54 +819,44 @@ elif page == "Route Optimization":
                 unsafe_allow_html=True,
             )
 
-        # Route stats row
         s1, s2, s3, s4 = st.columns(4)
         with s1:
             st.markdown(
-                f"""
-            <div class="route-stat-card">
+                f"""<div class="route-stat-card">
                 <div class="route-stat-label">Original Flood Risk</div>
                 <div class="route-stat-value" style="color:#f87171;">
                     {route_row['original_flood_prob']:.1%}
-                </div>
-            </div>""",
+                </div></div>""",
                 unsafe_allow_html=True,
             )
         with s2:
             st.markdown(
-                f"""
-            <div class="route-stat-card">
+                f"""<div class="route-stat-card">
                 <div class="route-stat-label">Alternative Flood Risk</div>
                 <div class="route-stat-value" style="color:#4ade80;">
                     {route_row['alternative_flood_prob']:.1%}
-                </div>
-            </div>""",
+                </div></div>""",
                 unsafe_allow_html=True,
             )
         with s3:
             st.markdown(
-                f"""
-            <div class="route-stat-card">
+                f"""<div class="route-stat-card">
                 <div class="route-stat-label">Risk Reduction</div>
                 <div class="route-stat-value" style="color:#1a6fc4;">
                     {route_row['risk_reduction']:.3f}
-                </div>
-            </div>""",
+                </div></div>""",
                 unsafe_allow_html=True,
             )
         with s4:
             st.markdown(
-                f"""
-            <div class="route-stat-card">
+                f"""<div class="route-stat-card">
                 <div class="route-stat-label">Extra Travel Time</div>
                 <div class="route-stat-value" style="color:#fbbf24;">
                     +{route_row['extra_time_min']:.1f} min
-                </div>
-            </div>""",
+                </div></div>""",
                 unsafe_allow_html=True,
             )
 
-        # Original / Alternative toggle
         st.markdown("<div style='margin-top:0.75rem'></div>", unsafe_allow_html=True)
         route_view = st.radio(
             "Route view",
@@ -791,13 +865,11 @@ elif page == "Route Optimization":
             label_visibility="collapsed",
         )
 
-        # Build the route map
         route_map = folium.Map(
             location=[NAIROBI_LAT, NAIROBI_LON],
             zoom_start=12,
             tiles="CartoDB dark_matter",
         )
-
         route_coords = get_route_shape(route_id, trips, shapes)
         route_stops = get_route_stops(route_id, trips, stop_times, stops)
 
@@ -806,17 +878,14 @@ elif page == "Route Optimization":
                 "🔵 Original route path · 🔴 Affected stops (in flood-risk wards) · "
                 "⚪ Safe stops"
             )
-            # Draw original route shape in blue
             if route_coords:
                 folium.PolyLine(
                     route_coords,
                     color="#378ADD",
                     weight=4,
                     opacity=0.9,
-                    tooltip=f"Route {route_id} — Original",
+                    tooltip=f"Route {route_id} - Original",
                 ).add_to(route_map)
-
-            # Draw stops — red if affected, grey if safe
             if not route_stops.empty:
                 for _, stop_row in route_stops.iterrows():
                     is_affected = stop_row["stop_id"] in affected_stop_ids
@@ -833,16 +902,13 @@ elif page == "Route Optimization":
                             else str(stop_row.get("stop_name", stop_row["stop_id"]))
                         ),
                     ).add_to(route_map)
-
-            # Auto-fit to route bounds if we have coordinates
             if route_coords:
                 lats = [c[0] for c in route_coords]
                 lons = [c[1] for c in route_coords]
                 route_map.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
 
-        else:  # Alternative Route
+        else:
             alt_coords = route_geoms.get(str(route_id), {}).get("alternative", [])
-
             st.caption(
                 "🟠 Alternative route (Dijkstra, flood-weighted) · "
                 "🔵 Original route (faded reference) · "
@@ -851,19 +917,15 @@ elif page == "Route Optimization":
                     route_row["risk_reduction"], route_row["extra_time_min"]
                 )
             )
-
-            # Original route faded for reference
             if route_coords:
                 folium.PolyLine(
                     route_coords,
                     color="#1e3a5f",
                     weight=3,
                     opacity=0.4,
-                    tooltip=f"Route {route_id} — Original (reference)",
+                    tooltip=f"Route {route_id} - Original (reference)",
                     dash_array="6",
                 ).add_to(route_map)
-
-            # Alternative route in orange
             if alt_coords:
                 folium.PolyLine(
                     alt_coords,
@@ -871,14 +933,13 @@ elif page == "Route Optimization":
                     weight=4,
                     opacity=0.9,
                     dash_array="8",
-                    tooltip=f"Route {route_id} — Alternative",
+                    tooltip=f"Route {route_id} - Alternative",
                 ).add_to(route_map)
             else:
                 st.warning(
-                    "Alternative path geometry not found. Re-run route_optimization.ipynb."
+                    "Alternative path geometry not found. "
+                    "Re-run route_optimization.ipynb."
                 )
-
-            # Stops — affected ones marked as skipped
             if not route_stops.empty:
                 for _, stop_row in route_stops.iterrows():
                     is_affected = stop_row["stop_id"] in affected_stop_ids
@@ -895,28 +956,23 @@ elif page == "Route Optimization":
                             else str(stop_row.get("stop_name", stop_row["stop_id"]))
                         ),
                     ).add_to(route_map)
-
-            # Fit bounds to whichever path we have
             coords_for_bounds = alt_coords if alt_coords else route_coords
             if coords_for_bounds:
                 lats = [c[0] for c in coords_for_bounds]
                 lons = [c[1] for c in coords_for_bounds]
                 route_map.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
-
-            # Info marker at alternative route midpoint
             if alt_coords:
                 mid = alt_coords[len(alt_coords) // 2]
                 folium.Marker(
                     location=mid,
                     icon=folium.DivIcon(
-                        html=f"""
-                        <div style="background:#0d2137;border:1px solid #EF9F27;
-                                    border-radius:4px;padding:4px 8px;
-                                    font-family:monospace;font-size:11px;
-                                    color:#e2e8f0;white-space:nowrap;">
-                            Alternative · Risk ↓{route_row['risk_reduction']:.3f}
-                            · +{route_row['extra_time_min']:.1f} min
-                        </div>""",
+                        html=(
+                            f"<div style='background:#0d2137;border:1px solid #EF9F27;"
+                            f"border-radius:4px;padding:4px 8px;font-family:monospace;"
+                            f"font-size:11px;color:#e2e8f0;white-space:nowrap;'>"
+                            f"Alternative · Risk ↓{route_row['risk_reduction']:.3f}"
+                            f" · +{route_row['extra_time_min']:.1f} min</div>"
+                        ),
                         icon_size=(270, 30),
                         icon_anchor=(135, 15),
                     ),
@@ -925,31 +981,179 @@ elif page == "Route Optimization":
         st_folium(route_map, use_container_width=True, height=500)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PAGE 4 — MODEL PERFORMANCE
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# PAGE 4 - AI ASSISTANT (Mlinzi)
+# =============================================================================
+elif page == "AI Assistant":
+
+    st.markdown(
+        '<div class="section-header">Flood Guard AI Assistant</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "Hi. My name is Mlinzi, an AI Chatbot specifically designed to help you "
+        "with any questions you might have regarding flooding in Kenya. "
+        "Ask anything about flood risk, affected wards, route recommendations, "
+        "or how to interpret the model results."
+    )
+
+    # Input form at the top
+    with st.form(key="chat_form", clear_on_submit=True):
+        input_col, btn_col = st.columns([11, 1])
+        with input_col:
+            user_input = st.text_input(
+                "",
+                placeholder="Ask about flood risk, routes, or the model...",
+                label_visibility="collapsed",
+            )
+        with btn_col:
+            submitted = st.form_submit_button("➤")
+
+    st.markdown(
+        "<hr style='border:none;border-top:1px solid #1e2d3d;margin:0.5rem 0 1rem 0;'>",
+        unsafe_allow_html=True,
+    )
+
+    # Build rich context
+    wards_context = (
+        df[
+            [
+                "ward",
+                "subcounty",
+                "county",
+                "flood_prob",
+                "risk_label",
+                "elevation_mean_m",
+                "elevation_min_m",
+                "elevation_max_m",
+                "slope_mean_deg",
+                "rain_cumulative_mm",
+                "rain_max_daily_mm",
+                "rain_preflood_7d_mm",
+                "pop2009",
+            ]
+        ]
+        .sort_values("flood_prob", ascending=False)
+        .head(100)
+        .assign(flood_prob=lambda x: x["flood_prob"].map("{:.1%}".format))
+        .to_string(index=False)
+    )
+
+    model_perf_context = ""
+    model_csv = DATA / "model_comparison.csv"
+    if model_csv.exists():
+        model_perf_context = "\nModel Performance Comparison:\n" + pd.read_csv(
+            model_csv
+        ).to_string(index=False)
+
+    rerouting_context = ""
+    if REROUTING_CSV.exists():
+        r = load_rerouting()
+        rerouting_context = (
+            f"\nFull Rerouting Summary ({len(r)} affected routes):\n"
+            + r.to_string(index=False)
+            + "\n\nAggregate stats:"
+            + f"\n  Average risk reduction : {r['risk_reduction'].mean():.3f}"
+            + f"\n  Average extra time (min): {r['extra_time_min'].mean():.1f}"
+            + f"\n  Routes with risk > 0   : {(r['risk_reduction'] > 0).sum()}"
+        )
+
+    system_prompt = (
+        "You are Mlinzi, an AI assistant for Nairobi Flood Guard - a data science project\n"
+        "that predicts flood susceptibility across Kenya's 1,450 administrative wards and\n"
+        "recommends alternative matatu routes during flood events. Your name means\n"
+        "'guardian' or 'protector' in Swahili, which reflects your purpose.\n\n"
+        "--- PROJECT OVERVIEW ---\n"
+        "The prediction model is XGBoost trained on the following features:\n"
+        "  Terrain  : elevation (mean, min, max, range in metres), slope (degrees)\n"
+        "  Rainfall : cumulative 90-day (mm), max single-day (mm), 7-day pre-flood (mm)\n"
+        "  Population: 2009 Kenya census ward population\n\n"
+        "Key insight: flooding in Kenya is primarily terrain-driven at ward scale.\n"
+        "Low-lying wards flood not because they receive more rain but because water drains\n"
+        "into them from surrounding higher ground. Elevation features dominate predictions;\n"
+        "rainfall adds marginal predictive value at this spatial resolution.\n\n"
+        "--- CURRENT RISK SUMMARY ---\n"
+        f"Total wards         : {len(df)}\n"
+        f"High-risk (>= {threshold:.0%}) : {int(n_total)}\n"
+        f"Critical risk (>= 70%): {int(n_critical)}\n\n"
+        "Risk thresholds:\n"
+        "  Low      : flood probability < 20%\n"
+        "  Moderate : 20% - 45%\n"
+        "  High     : 45% - 70%\n"
+        "  Critical : >= 70%\n\n"
+        "--- ALL WARD DATA (top 100 by flood probability) ---\n"
+        f"{wards_context}\n\n"
+        "--- MODEL PERFORMANCE ---\n"
+        f"{model_perf_context if model_perf_context else 'Model comparison data not available.'}\n\n"
+        "--- ROUTE OPTIMIZATION ---\n"
+        "The route optimization system:\n"
+        "  - Uses XGBoost flood probabilities to identify high-risk road segments\n"
+        "  - Assigns flood cost = travel_time x (1 + alpha x flood_probability), "
+        "alpha = 1,000,000\n"
+        "    (effectively blocking all flood-affected roads outright)\n"
+        "  - Runs weighted Dijkstra to find the safest alternative path\n"
+        "  - Outputs a GTFS-RT feed consumable by transit apps\n\n"
+        f"{rerouting_context if rerouting_context else 'Rerouting data not available.'}\n\n"
+        "--- INSTRUCTIONS ---\n"
+        "- Be concise, factual, and actionable.\n"
+        "- When asked about a specific ward, look it up in the ward data above and quote\n"
+        "  its exact flood probability, risk level, and key terrain/rainfall figures.\n"
+        "- When asked about routes, reference the rerouting summary above by route ID.\n"
+        "- If asked which wards are most at risk, list the top entries from the ward data.\n"
+        "- If asked about the model, explain the XGBoost pipeline and feature importance.\n"
+        "- Do not make up data - all ward and route figures are provided above.\n"
+        "- Respond in English unless the user writes in another language.\n"
+    )
+
+    # Process new input
+    if submitted and user_input.strip():
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+        st.session_state.messages.append(
+            {"role": "user", "content": user_input.strip()}
+        )
+        with st.spinner("Mlinzi is thinking..."):
+            client = get_groq_client()
+            response = client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    *st.session_state.messages,
+                ],
+                max_tokens=1024,
+                temperature=0.4,
+            )
+            reply = response.choices[0].message.content
+        st.session_state.messages.append({"role": "assistant", "content": reply})
+
+    # Render message history below the input
+    for msg in st.session_state.get("messages", []):
+        render_message(msg["role"], msg["content"])
+
+    if st.session_state.get("messages"):
+        if st.button("Clear conversation"):
+            st.session_state.messages = []
+            st.rerun()
+
+
+# =============================================================================
+# PAGE 5 - MODEL PERFORMANCE
+# =============================================================================
 elif page == "Model Performance":
 
     st.markdown(
         '<div class="section-header">Model Evaluation Summary</div>',
         unsafe_allow_html=True,
     )
-    st.markdown("""
-    Four classification models were trained and evaluated on 1,450 Kenya ward-level samples.
-    **Recall** is the primary metric — a missed flood prediction carries far greater
-    consequences than a false alarm. The XGBoost model was selected as the best overall
-    performer and powers both the flood risk map and the route optimization system.
-    """)
+    st.markdown(
+        "Four classification models were trained and evaluated on 1,450 Kenya "
+        "ward-level samples. **Recall** is the primary metric - a missed flood "
+        "prediction carries far greater consequences than a false alarm. The XGBoost "
+        "model was selected as the best overall performer and powers both the flood "
+        "risk map and the route optimization system."
+    )
 
-    metrics_df = pd.read_csv("./Data/model_comparison.csv")
-
-    def highlight_best(s):
-        is_best = s == s.max()
-        return [
-            "background-color: #0d2137; color: #4ade80; font-weight:600" if v else ""
-            for v in is_best
-        ]
-
+    metrics_df = pd.read_csv(DATA / "model_comparison.csv")
     styled = (
         metrics_df.set_index("Model")
         .style.apply(highlight_best, axis=0)
@@ -991,7 +1195,7 @@ elif page == "Model Performance":
     except KeyError:
         st.warning(
             "Could not find 'classifier' step in the pipeline. "
-            "Check the step name with: `print(model.named_steps.keys())`"
+            "Check the step name with: print(model.named_steps.keys())"
         )
     except Exception as e:
         st.error(f"Feature importance error: {e}")
