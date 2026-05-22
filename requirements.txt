@@ -8,3 +8,4 @@ plotly
 xgboost
 scikit-learn
 imblearn
+africastalking
