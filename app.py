@@ -1126,93 +1126,93 @@ elif page == "AI Assistant":
 # =============================================================================
 # PAGE 5 - MODEL PERFORMANCE
 # =============================================================================
-elif page == "Model Performance":
+# elif page == "Model Performance":
 
-    st.markdown(
-        '<div class="section-header">Model Evaluation Summary</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        "Four classification models were trained and evaluated on 1,450 Kenya "
-        "ward-level samples. **Recall** is the primary metric - a missed flood "
-        "prediction carries far greater consequences than a false alarm. The XGBoost "
-        "model was selected as the best overall performer and powers both the flood "
-        "risk map and the route optimization system."
-    )
+#     st.markdown(
+#         '<div class="section-header">Model Evaluation Summary</div>',
+#         unsafe_allow_html=True,
+#     )
+#     st.markdown(
+#         "Four classification models were trained and evaluated on 1,450 Kenya "
+#         "ward-level samples. **Recall** is the primary metric - a missed flood "
+#         "prediction carries far greater consequences than a false alarm. The XGBoost "
+#         "model was selected as the best overall performer and powers both the flood "
+#         "risk map and the route optimization system."
+#     )
 
-    metrics_df = pd.read_csv(DATA / "model_comparison.csv")
-    styled = (
-        metrics_df.set_index("Model")
-        .style.apply(highlight_best, axis=0)
-        .format("{:.3f}")
-    )
-    st.dataframe(styled, width="stretch")
+#     metrics_df = pd.read_csv(DATA / "model_comparison.csv")
+#     styled = (
+#         metrics_df.set_index("Model")
+#         .style.apply(highlight_best, axis=0)
+#         .format("{:.3f}")
+#     )
+#     st.dataframe(styled, width="stretch")
 
-    st.markdown(
-        '<div class="section-header" style="margin-top:1.5rem">Feature Importance (XGBoost)</div>',
-        unsafe_allow_html=True,
-    )
-    try:
-        classifier = model.named_steps["classifier"]
-        importances = classifier.feature_importances_
-        feat_imp = pd.DataFrame(
-            {"Feature": FEATURE_COLS, "Importance": importances}
-        ).sort_values("Importance", ascending=True)
-        fig = px.bar(
-            feat_imp,
-            x="Importance",
-            y="Feature",
-            orientation="h",
-            color="Importance",
-            color_continuous_scale=["#0d2137", "#1a6fc4", "#4ade80"],
-            labels={"Importance": "Feature Importance", "Feature": ""},
-        )
-        fig.update_layout(
-            paper_bgcolor="#0a0f1e",
-            plot_bgcolor="#0d1117",
-            font_color="#e2e8f0",
-            font_family="DM Mono",
-            coloraxis_showscale=False,
-            margin=dict(t=10, b=10, l=10, r=10),
-            xaxis=dict(gridcolor="#1e2d3d"),
-            yaxis=dict(gridcolor="#1e2d3d"),
-            height=380,
-        )
-        st.plotly_chart(fig, width="stretch")
-    except KeyError:
-        st.warning(
-            "Could not find 'classifier' step in the pipeline. "
-            "Check the step name with: print(model.named_steps.keys())"
-        )
-    except Exception as e:
-        st.error(f"Feature importance error: {e}")
+#     st.markdown(
+#         '<div class="section-header" style="margin-top:1.5rem">Feature Importance (XGBoost)</div>',
+#         unsafe_allow_html=True,
+#     )
+#     try:
+#         classifier = model.named_steps["classifier"]
+#         importances = classifier.feature_importances_
+#         feat_imp = pd.DataFrame(
+#             {"Feature": FEATURE_COLS, "Importance": importances}
+#         ).sort_values("Importance", ascending=True)
+#         fig = px.bar(
+#             feat_imp,
+#             x="Importance",
+#             y="Feature",
+#             orientation="h",
+#             color="Importance",
+#             color_continuous_scale=["#0d2137", "#1a6fc4", "#4ade80"],
+#             labels={"Importance": "Feature Importance", "Feature": ""},
+#         )
+#         fig.update_layout(
+#             paper_bgcolor="#0a0f1e",
+#             plot_bgcolor="#0d1117",
+#             font_color="#e2e8f0",
+#             font_family="DM Mono",
+#             coloraxis_showscale=False,
+#             margin=dict(t=10, b=10, l=10, r=10),
+#             xaxis=dict(gridcolor="#1e2d3d"),
+#             yaxis=dict(gridcolor="#1e2d3d"),
+#             height=380,
+#         )
+#         st.plotly_chart(fig, width="stretch")
+#     except KeyError:
+#         st.warning(
+#             "Could not find 'classifier' step in the pipeline. "
+#             "Check the step name with: print(model.named_steps.keys())"
+#         )
+#     except Exception as e:
+#         st.error(f"Feature importance error: {e}")
 
-    st.markdown(
-        '<div class="section-header" style="margin-top:1.5rem">Data Overview</div>',
-        unsafe_allow_html=True,
-    )
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.metric("Total Wards", len(df))
-    with c2:
-        st.metric("Flooded Wards", int(df["flooded"].sum()))
-    with c3:
-        st.metric("Counties Covered", df["county"].nunique())
-    with c4:
-        st.metric("Features Used", len(FEATURE_COLS))
+#     st.markdown(
+#         '<div class="section-header" style="margin-top:1.5rem">Data Overview</div>',
+#         unsafe_allow_html=True,
+#     )
+#     c1, c2, c3, c4 = st.columns(4)
+#     with c1:
+#         st.metric("Total Wards", len(df))
+#     with c2:
+#         st.metric("Flooded Wards", int(df["flooded"].sum()))
+#     with c3:
+#         st.metric("Counties Covered", df["county"].nunique())
+#     with c4:
+#         st.metric("Features Used", len(FEATURE_COLS))
 
-    fig2 = px.pie(
-        names=["Not Flooded", "Flooded"],
-        values=[(df["flooded"] == 0).sum(), df["flooded"].sum()],
-        color_discrete_sequence=["#1a6fc4", "#f87171"],
-        hole=0.55,
-    )
-    fig2.update_layout(
-        paper_bgcolor="#0a0f1e",
-        font_color="#e2e8f0",
-        font_family="DM Mono",
-        legend=dict(bgcolor="#0a0f1e"),
-        margin=dict(t=10, b=10, l=10, r=10),
-        height=300,
-    )
-    st.plotly_chart(fig2, width="stretch")
+#     fig2 = px.pie(
+#         names=["Not Flooded", "Flooded"],
+#         values=[(df["flooded"] == 0).sum(), df["flooded"].sum()],
+#         color_discrete_sequence=["#1a6fc4", "#f87171"],
+#         hole=0.55,
+#     )
+#     fig2.update_layout(
+#         paper_bgcolor="#0a0f1e",
+#         font_color="#e2e8f0",
+#         font_family="DM Mono",
+#         legend=dict(bgcolor="#0a0f1e"),
+#         margin=dict(t=10, b=10, l=10, r=10),
+#         height=300,
+#     )
+#     st.plotly_chart(fig2, width="stretch")
