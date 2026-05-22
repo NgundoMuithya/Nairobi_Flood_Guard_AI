@@ -1076,7 +1076,7 @@ elif page == "AI Assistant":
         "The route optimization system:\n"
         "  - Uses XGBoost flood probabilities to identify high-risk road segments\n"
         "  - Assigns flood cost = travel_time x (1 + alpha x flood_probability), "
-        "alpha = 1,000,000\n"
+        "alpha = 10\n"
         "    (effectively blocking all flood-affected roads outright)\n"
         "  - Runs weighted Dijkstra to find the safest alternative path\n"
         "  - Outputs a GTFS-RT feed consumable by transit apps\n\n"
