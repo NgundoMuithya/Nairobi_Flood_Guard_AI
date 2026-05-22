@@ -400,7 +400,6 @@ with st.sidebar:
             "Flood Risk Dashboard",
             "Ward Lookup",
             "Route Optimization",
-            "Model Performance",
             "AI Assistant",
         ],
         label_visibility="collapsed",
