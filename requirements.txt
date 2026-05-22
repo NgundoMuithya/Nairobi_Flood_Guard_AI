@@ -9,3 +9,4 @@ xgboost
 scikit-learn
 imblearn
 africastalking
+shap
