@@ -11,6 +11,14 @@ from pathlib import Path
 
 import pandas as pd
 import geopandas as gpd
+import numpy as np
+
+try:
+    import shap
+
+    SHAP_AVAILABLE = True
+except ImportError:
+    SHAP_AVAILABLE = False
 import folium
 import streamlit as st
 from streamlit_folium import st_folium
@@ -653,6 +661,122 @@ elif page == "Ward Lookup":
         tooltip=f"{selected_ward} - {prob:.1%} flood probability",
     ).add_to(mini_map)
     st_folium(mini_map, width="stretch", height=320)
+
+    # -- SHAP Feature Explanation ---------------------------------------------
+    st.markdown("#### Why this flood risk score?")
+    st.caption(
+        "Each bar shows how much a feature pushed the flood probability "
+        "up (positive) or down (negative) from the baseline."
+    )
+
+    ward_idx = df[df["ward"] == selected_ward].index[0]
+    X_all = df[FEATURE_COLS].fillna(df[FEATURE_COLS].median())
+
+    if SHAP_AVAILABLE:
+        try:
+            explainer = shap.TreeExplainer(model.named_steps["classifier"])
+            shap_vals = explainer.shap_values(X_all)
+            ward_shap = shap_vals[df.index.get_loc(ward_idx)]
+            ward_data = X_all.loc[ward_idx]
+
+            shap_df = pd.DataFrame(
+                {
+                    "Feature": FEATURE_COLS,
+                    "SHAP Value": ward_shap,
+                    "Feature Value": ward_data.values,
+                }
+            ).sort_values("SHAP Value")
+            shap_df["Label"] = shap_df.apply(
+                lambda r: f"{r['Feature'].replace('_', ' ').title()}  ({r['Feature Value']:,.1f})",
+                axis=1,
+            )
+            shap_df["Color"] = shap_df["SHAP Value"].apply(
+                lambda v: "#f87171" if v > 0 else "#4ade80"
+            )
+
+            fig_shap = go.Figure(
+                go.Bar(
+                    x=shap_df["SHAP Value"],
+                    y=shap_df["Label"],
+                    orientation="h",
+                    marker_color=shap_df["Color"],
+                    hovertemplate="<b>%{y}</b><br>SHAP: %{x:.4f}<extra></extra>",
+                )
+            )
+            fig_shap.add_vline(x=0, line_color="#4a5568", line_width=1)
+            fig_shap.update_layout(
+                paper_bgcolor="#0a0f1e",
+                plot_bgcolor="#0d1117",
+                font_color="#e2e8f0",
+                font_family="DM Mono",
+                xaxis=dict(
+                    title="Impact on flood probability",
+                    gridcolor="#1e2d3d",
+                    zerolinecolor="#4a5568",
+                ),
+                yaxis=dict(gridcolor="#1e2d3d"),
+                margin=dict(t=10, b=10, l=10, r=10),
+                height=360,
+                showlegend=False,
+            )
+            st.plotly_chart(fig_shap, width="stretch")
+
+        except Exception as e:
+            st.warning(f"SHAP explanation unavailable: {e}")
+
+    else:
+        # Fallback: weighted feature importance bar chart (no shap needed)
+        try:
+            raw_imp = model.feature_importances_
+        except AttributeError:
+            raw_imp = np.ones(len(FEATURE_COLS))
+
+        ward_data = X_all.loc[ward_idx]
+        kenya_mean = X_all.mean()
+        deviation = (ward_data - kenya_mean) / (X_all.std() + 1e-9)
+        contribution = raw_imp * deviation.values
+
+        imp_df = pd.DataFrame(
+            {
+                "Feature": FEATURE_COLS,
+                "Contribution": contribution,
+                "Value": ward_data.values,
+            }
+        ).sort_values("Contribution")
+        imp_df["Label"] = imp_df.apply(
+            lambda r: f"{r['Feature'].replace('_', ' ').title()}  ({r['Value']:,.1f})",
+            axis=1,
+        )
+        imp_df["Color"] = imp_df["Contribution"].apply(
+            lambda v: "#f87171" if v > 0 else "#4ade80"
+        )
+
+        fig_imp = go.Figure(
+            go.Bar(
+                x=imp_df["Contribution"],
+                y=imp_df["Label"],
+                orientation="h",
+                marker_color=imp_df["Color"],
+                hovertemplate="<b>%{y}</b><br>Contribution: %{x:.4f}<extra></extra>",
+            )
+        )
+        fig_imp.add_vline(x=0, line_color="#4a5568", line_width=1)
+        fig_imp.update_layout(
+            paper_bgcolor="#0a0f1e",
+            plot_bgcolor="#0d1117",
+            font_color="#e2e8f0",
+            font_family="DM Mono",
+            xaxis=dict(
+                title="Feature contribution (importance × deviation from Kenya avg)",
+                gridcolor="#1e2d3d",
+            ),
+            yaxis=dict(gridcolor="#1e2d3d"),
+            margin=dict(t=10, b=10, l=10, r=10),
+            height=360,
+            showlegend=False,
+        )
+        st.plotly_chart(fig_imp, width="stretch")
+        st.caption("Install `shap` for exact SHAP values: `pip install shap`")
 
 
 # =============================================================================
