@@ -2,6 +2,7 @@ streamlit
 requests
 pandas
 geopandas
+networkx
 folium
 streamlit-folium
 groq
