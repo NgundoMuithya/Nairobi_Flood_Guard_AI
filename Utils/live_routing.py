@@ -60,7 +60,9 @@ def compute_edge_flood_map(
         how="left",
         predicate="within",
     )
-    edges_joined = edges_joined.groupby(["u", "v", "key"])["flood_prob"].max().reset_index()
+    edges_joined = (
+        edges_joined.groupby(["u", "v", "key"])["flood_prob"].max().reset_index()
+    )
     edges_joined["flood_prob"] = edges_joined["flood_prob"].fillna(0.0)
 
     return {
@@ -118,7 +120,9 @@ def find_alternative_route(
         dest_node = ox.nearest_nodes(G, X=destination[1], Y=destination[0])
 
         original_path = nx.shortest_path(G, orig_node, dest_node, weight="travel_time")
-        alternative_path = nx.shortest_path(G, orig_node, dest_node, weight="flood_cost")
+        alternative_path = nx.shortest_path(
+            G, orig_node, dest_node, weight="flood_cost"
+        )
 
         def path_metrics(path):
             total_time = sum(
@@ -169,10 +173,16 @@ def compute_affected_routes(
         how="left",
         predicate="within",
     )
-    affected_stops = set(stops_joined[stops_joined["flood_prob"].notna()]["stop_id"].tolist())
+    affected_stops = set(
+        stops_joined[stops_joined["flood_prob"].notna()]["stop_id"].tolist()
+    )
 
-    affected_trip_ids = stop_times[stop_times["stop_id"].isin(affected_stops)]["trip_id"].unique()
-    affected_route_ids = trips[trips["trip_id"].isin(affected_trip_ids)]["route_id"].unique().tolist()
+    affected_trip_ids = stop_times[stop_times["stop_id"].isin(affected_stops)][
+        "trip_id"
+    ].unique()
+    affected_route_ids = (
+        trips[trips["trip_id"].isin(affected_trip_ids)]["route_id"].unique().tolist()
+    )
     return affected_route_ids, affected_stops
 
 
@@ -219,9 +229,17 @@ def run_live_rerouting(
             results.append(result)
 
     RESULT_COLS = [
-        "route_id", "origin", "destination", "original_path", "alternative_path",
-        "original_time_s", "alternative_time_s", "extra_time_min",
-        "original_flood_prob", "alternative_flood_prob", "risk_reduction",
+        "route_id",
+        "origin",
+        "destination",
+        "original_path",
+        "alternative_path",
+        "original_time_s",
+        "alternative_time_s",
+        "extra_time_min",
+        "original_flood_prob",
+        "alternative_flood_prob",
+        "risk_reduction",
     ]
     results_df = pd.DataFrame(results, columns=RESULT_COLS)
 
