@@ -34,6 +34,16 @@ from groq import Groq
 import plotly.express as px
 import plotly.graph_objects as go
 
+from Utils.rainfall_fetcher import RAIN_COLS, apply_live_rainfall, rainfall_summary
+from Utils.live_routing import run_live_rerouting
+
+try:
+    import osmnx as ox
+
+    OSMNX_AVAILABLE = True
+except ImportError:
+    OSMNX_AVAILABLE = False
+
 warnings.filterwarnings("ignore")
 
 
@@ -50,6 +60,7 @@ XGB_MODEL = MODELS / "best_xgboost_model.pkl"
 REROUTING_CSV = REPORTS / "rerouting_summary.csv"
 TRADEOFF_PNG = REPORTS / "rerouting_tradeoff.png"
 ROUTE_GEOMETRIES = REPORTS / "route_geometries.json"
+ROAD_GRAPH = DATA / "nairobi_road_network.graphml"
 
 NAIROBI_LAT, NAIROBI_LON = -1.286389, 36.817223
 
@@ -175,6 +186,18 @@ div[data-testid="stMetric"] {
 
 
 # -- Helpers ------------------------------------------------------------------
+def flood_prob_fingerprint(wards_gdf, alpha, threshold) -> str:
+    """Hash of ward flood_prob values + alpha/threshold - changes whenever
+    the underlying risk data (or routing params) actually change, so the
+    live-routing cache invalidates correctly without hashing the full gdf."""
+    import hashlib
+
+    vals = tuple(
+        np.round(wards_gdf.sort_values("ward")["flood_prob"].values, 4).tolist()
+    )
+    return hashlib.md5(f"{vals}-{alpha}-{threshold}".encode()).hexdigest()
+
+
 def risk_label(prob: float) -> tuple[str, str]:
     if prob >= 0.70:
         return "Critical", "badge-critical"
@@ -193,6 +216,21 @@ def risk_color(prob: float) -> str:
     if prob >= 0.20:
         return "#fbbf24"
     return "#4ade80"
+
+
+def delta_color(delta: float) -> str:
+    """Diverging color for live-vs-historical flood_prob shift. Buckets rather
+    than a continuous scale, since a handful of pp of real movement should
+    read clearly rather than blur into a gradient."""
+    if delta >= 0.03:
+        return "#f87171"  # risk rose meaningfully
+    if delta >= 0.01:
+        return "#fca5a5"  # risk rose slightly
+    if delta <= -0.03:
+        return "#60a5fa"  # risk fell meaningfully
+    if delta <= -0.01:
+        return "#93c5fd"  # risk fell slightly
+    return "#334155"  # negligible change
 
 
 def normalize(col: str, df: pd.DataFrame) -> pd.Series:
@@ -293,6 +331,28 @@ def load_model():
         return pickle.load(f)
 
 
+@st.cache_resource(show_spinner=False)
+def load_road_graph():
+    """~87k nodes / ~213k edges - load once per process, never per rerun."""
+    return ox.load_graphml(ROAD_GRAPH)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_live_routes(
+    _G, _wards_gdf, _stops_df, _stop_times, _trips, alpha, threshold, fingerprint
+):
+    """
+    Recompute flood-weighted rerouting against current ward flood_prob.
+    Leading-underscore args are excluded from Streamlit's hash (the graph and
+    GTFS tables are large/static); `fingerprint` - a hash of the actual
+    flood_prob values plus alpha/threshold - is what invalidates the cache
+    when risk data genuinely changes.
+    """
+    return run_live_rerouting(
+        _G, _wards_gdf, _stops_df, _stop_times, _trips, alpha=alpha, threshold=threshold
+    )
+
+
 @st.cache_data
 def load_rerouting():
     return pd.read_csv(REROUTING_CSV)
@@ -321,10 +381,9 @@ def load_route_geometries():
         return json.load(f)
 
 
-@st.cache_data
-def generate_predictions(_model, _df):
-    X = _df[FEATURE_COLS].fillna(_df[FEATURE_COLS].median())
-    return _model.predict_proba(X)[:, 1]
+def generate_predictions(model, df):
+    X = df[FEATURE_COLS].fillna(df[FEATURE_COLS].median())
+    return model.predict_proba(X)[:, 1]
 
 
 # Build choropleth - not cached since Folium maps with lambdas can't be pickled
@@ -345,6 +404,38 @@ def build_choropleth(map_df, centre_lat, centre_lon, zoom):
         tooltip=folium.GeoJsonTooltip(
             fields=["ward", "subcounty", "county", "flood_prob", "risk_label"],
             aliases=["Ward", "Sub-County", "County", "Flood Probability", "Risk Level"],
+            localize=True,
+            sticky=False,
+        ),
+    ).add_to(fmap)
+    return fmap
+
+
+def build_delta_choropleth(map_df, centre_lat, centre_lon, zoom):
+    fmap = folium.Map(
+        location=[centre_lat, centre_lon],
+        zoom_start=zoom,
+        tiles="CartoDB dark_matter",
+    )
+    folium.GeoJson(
+        map_df[
+            ["ward", "subcounty", "historical_prob", "live_prob", "delta", "geometry"]
+        ],
+        style_function=lambda feature: {
+            "fillColor": delta_color(float(feature["properties"]["delta"])),
+            "fillOpacity": 0.65,
+            "color": delta_color(float(feature["properties"]["delta"])),
+            "weight": 0.8,
+        },
+        tooltip=folium.GeoJsonTooltip(
+            fields=["ward", "subcounty", "historical_prob", "live_prob", "delta"],
+            aliases=[
+                "Ward",
+                "Sub-County",
+                "Historical",
+                "Live",
+                "Δ (Live − Historical)",
+            ],
             localize=True,
             sticky=False,
         ),
@@ -389,12 +480,35 @@ def get_affected_stop_ids(nairobi_df, stops_df, flood_threshold):
     return set(joined["stop_id"].tolist())
 
 
-# -- Load everything ----------------------------------------------------------
-df = load_data()
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_live_ward_dataframe(cache_bust: int, skip_file_cache: bool):
+    """
+    Fetch live rainfall for Nairobi wards only (~91 wards) and merge them into
+    the full nationwide dataframe; other counties keep their historical CHIRPS
+    values. Route optimization and SMS alerts only ever operate on Nairobi, so
+    this is the part of the country that actually needs to be live - fetching
+    live rainfall for all ~1,450 wards nationwide was the main cause of the
+    slow (~15 min) refresh.
+    """
+    base = load_data()
+    nairobi_mask = base["county"].str.lower() == "nairobi"
+
+    live_nairobi, meta = apply_live_rainfall(
+        base[nairobi_mask],
+        use_cache=not skip_file_cache,
+    )
+
+    combined = base.copy()
+    combined.loc[nairobi_mask, RAIN_COLS] = live_nairobi[RAIN_COLS].values
+    meta["scope"] = (
+        f"Nairobi ({int(nairobi_mask.sum())} wards) · other counties remain historical"
+    )
+    return combined, meta
+
+
+# -- Load base data & model ---------------------------------------------------
+base_df = load_data()
 model = load_model()
-df["flood_prob"] = generate_predictions(model, df)
-df["risk_label"], _ = zip(*df["flood_prob"].map(risk_label))
-nairobi = df[df["county"].str.lower() == "nairobi"].copy()
 
 # -- Header -------------------------------------------------------------------
 st.markdown(
@@ -422,6 +536,29 @@ with st.sidebar:
         label_visibility="collapsed",
     )
     st.markdown("---")
+    st.markdown("### Rainfall Data")
+    data_mode = st.radio(
+        "Source",
+        ["Live (Open-Meteo)", "Historical (Apr 2024)"],
+        help=(
+            "Live mode fetches the last 90 days of precipitation from Open-Meteo "
+            "and updates ward rainfall features before each prediction."
+        ),
+    )
+    use_live = data_mode.startswith("Live")
+    if use_live:
+        if st.button("Refresh rainfall now", use_container_width=True):
+            st.session_state["force_rainfall_refresh"] = True
+            st.session_state["rainfall_cache_bust"] = (
+                st.session_state.get("rainfall_cache_bust", 0) + 1
+            )
+        st.caption(
+            "Live rainfall applies to Nairobi's wards only (where route "
+            "optimization and alerts operate). Other counties keep the "
+            "historical Apr 2024 data. First fetch typically takes a few "
+            "seconds; results are cached for 6 hours."
+        )
+    st.markdown("---")
     st.markdown("### Risk Threshold")
     threshold = st.slider(
         "Flag wards above this probability as high-risk",
@@ -431,16 +568,47 @@ with st.sidebar:
         step=0.05,
         format="%.2f",
     )
-    st.markdown("---")
-    n_critical = (df["flood_prob"] >= 0.70).sum()
-    n_high = ((df["flood_prob"] >= threshold) & (df["flood_prob"] < 0.70)).sum()
-    n_total = (df["flood_prob"] >= threshold).sum()
 
+# -- Apply rainfall source & generate predictions -------------------------------
+force_refresh = st.session_state.pop("force_rainfall_refresh", False)
+cache_bust = st.session_state.get("rainfall_cache_bust", 0)
+rainfall_meta: dict = {"source": "historical", "label": "CHIRPS Feb-Apr 2024"}
+
+if use_live:
+    try:
+        if force_refresh:
+            get_live_ward_dataframe.clear()
+        with st.spinner(
+            "Loading live rainfall… (first fetch may take ~2 min due to API limits)"
+        ):
+            df, rainfall_meta = get_live_ward_dataframe(cache_bust, force_refresh)
+    except Exception as exc:
+        st.warning(
+            f"Could not fetch live rainfall ({exc}). "
+            "Falling back to historical Apr 2024 data."
+        )
+        df = base_df.copy()
+        rainfall_meta = {"source": "historical", "label": "CHIRPS Feb-Apr 2024"}
+else:
+    df = base_df.copy()
+
+df["flood_prob"] = generate_predictions(model, df)
+df["risk_label"], _ = zip(*df["flood_prob"].map(risk_label))
+nairobi = df[df["county"].str.lower() == "nairobi"].copy()
+
+n_critical = (df["flood_prob"] >= 0.70).sum()
+n_high = ((df["flood_prob"] >= threshold) & (df["flood_prob"] < 0.70)).sum()
+n_total = (df["flood_prob"] >= threshold).sum()
+
+with st.sidebar:
+    st.markdown("---")
     st.markdown("### Kenya-Wide Summary")
     st.metric("Total Wards", len(df))
     st.metric("Critical Risk", int(n_critical))
     st.metric("High Risk", int(n_high))
     st.metric("Above Threshold", int(n_total))
+    if use_live:
+        st.caption(rainfall_summary(rainfall_meta))
     st.markdown("---")
 
     # -- SMS Early Warning System ---------------------------------------------
@@ -601,10 +769,13 @@ with st.sidebar:
                     )
 
     st.markdown("---")
+    rainfall_label = (
+        rainfall_summary(rainfall_meta) if use_live else "Rainfall: CHIRPS Feb-Apr 2024"
+    )
     st.markdown(
-        "<span style='font-size:0.65rem;color:#4a5568;'>Model: XGBoost · "
-        "Data: UNOSAT April 2024 · Terrain: SRTM 90m · "
-        "Rainfall: CHIRPS Feb-Apr 2024</span>",
+        f"<span style='font-size:0.65rem;color:#4a5568;'>Model: XGBoost · "
+        f"Labels: UNOSAT Apr 2024 · Terrain: SRTM 90m · "
+        f"{rainfall_label}</span>",
         unsafe_allow_html=True,
     )
 
@@ -614,13 +785,22 @@ with st.sidebar:
 # =============================================================================
 if page == "Flood Risk Dashboard":
 
+    if use_live:
+        st.info(
+            f"**Live mode** — predictions use current rainfall "
+            f"({rainfall_summary(rainfall_meta)}). "
+            "Terrain features remain static (SRTM). "
+            "Switch to Historical in the sidebar to compare with the Apr 2024 event."
+        )
+
     st.markdown(
         '<div class="section-header">County Flood Risk Map</div>',
         unsafe_allow_html=True,
     )
 
     counties = sorted(df["county"].unique())
-    selected_county = st.selectbox("Filter by county", counties)
+    default_idx = counties.index("Nairobi") if "Nairobi" in counties else 0
+    selected_county = st.selectbox("Filter by county", counties, index=default_idx)
 
     map_df = df[df["county"] == selected_county]
 
@@ -735,7 +915,7 @@ elif page == "Ward Lookup":
         "slope_mean_deg": ("Mean Slope", "°"),
         "rain_cumulative_mm": ("Cumulative Rainfall (90d)", "mm"),
         "rain_max_daily_mm": ("Max Daily Rainfall", "mm"),
-        "rain_preflood_7d_mm": ("Pre-Flood 7-Day Rainfall", "mm"),
+        "rain_preflood_7d_mm": ("Recent 7-Day Rainfall", "mm"),
     }
     cols = st.columns(4)
     for i, (col_name, (label_text, unit)) in enumerate(feature_labels.items()):
@@ -964,16 +1144,95 @@ elif page == "Route Optimization":
         "consumable by transit apps."
     )
 
-    if not REROUTING_CSV.exists():
-        st.warning(
-            "Rerouting summary not found. "
-            "Run Route_Optimization/route_optimization.ipynb first."
+    routing_source = "historical"
+    routing_meta: dict = {}
+    routes, trips, shapes, stops, stop_times = load_gtfs()
+
+    if use_live:
+        if not OSMNX_AVAILABLE:
+            st.warning(
+                "osmnx isn't installed, so live rerouting isn't available "
+                "here. Falling back to the historical (Apr 2024) rerouting "
+                "results below. Install with `pip install osmnx`."
+            )
+        else:
+            st.info(
+                "**Live routing** — recompute the flood-weighted road network "
+                "and rerun Dijkstra using current Nairobi flood risk. This "
+                "takes a few seconds (it's not run automatically on every "
+                "interaction, since it reruns Dijkstra across ~87k road "
+                "network nodes for every affected route)."
+            )
+            alpha = st.slider(
+                "α (flood-cost multiplier)",
+                min_value=1.0,
+                max_value=50.0,
+                value=10.0,
+                step=1.0,
+                help="Higher α makes the algorithm avoid flooded roads more "
+                "aggressively, at the cost of longer detours.",
+            )
+            if st.button("🔄 Recompute live routes", use_container_width=True):
+                st.session_state["force_live_routes"] = True
+            st.session_state.setdefault("live_routes_alpha", alpha)
+
+            if st.session_state.get("force_live_routes"):
+                with st.spinner(
+                    "Loading road network & running flood-weighted Dijkstra..."
+                ):
+                    try:
+                        G = load_road_graph()
+                        fingerprint = flood_prob_fingerprint(nairobi, alpha, threshold)
+                        rerouting_df, route_geoms, routing_meta = get_live_routes(
+                            G,
+                            nairobi,
+                            stops,
+                            stop_times,
+                            trips,
+                            alpha,
+                            threshold,
+                            fingerprint,
+                        )
+                        routing_source = "live"
+                    except Exception as exc:
+                        st.warning(
+                            f"Live rerouting failed ({exc}). "
+                            "Falling back to historical results."
+                        )
+
+    if routing_source == "historical":
+        if not REROUTING_CSV.exists():
+            st.info(
+                "No historical rerouting data on disk yet. "
+                + (
+                    "Click **Recompute live routes** above to generate results."
+                    if use_live and OSMNX_AVAILABLE
+                    else "Run Route_Optimization/route_optimization.ipynb first."
+                )
+            )
+            st.stop()
+        rerouting_df = load_rerouting()
+        route_geoms = load_route_geometries()
+
+    if routing_source == "live":
+        st.success(
+            f"Showing **live** rerouting (α={routing_meta['alpha']:.0f}, "
+            f"threshold={routing_meta['threshold']:.2f}) · "
+            f"{routing_meta['rerouted_routes']} of "
+            f"{routing_meta['total_affected_routes']} affected routes rerouted."
+        )
+    else:
+        st.caption(
+            "Showing **historical** rerouting results from the April 2024 "
+            "flood event (Route_Optimization/route_optimization.ipynb)."
+        )
+
+    if rerouting_df.empty:
+        st.success(
+            "✅ No routes currently need rerouting — flood risk is below the "
+            f"{threshold:.2f} threshold across all monitored wards."
         )
         st.stop()
-
-    rerouting_df = load_rerouting()
-    routes, trips, shapes, stops, stop_times = load_gtfs()
-    route_geoms = load_route_geometries()
 
     # Summary metrics
     c1, c2, c3, c4 = st.columns(4)
@@ -1039,7 +1298,34 @@ elif page == "Route Optimization":
         '<div class="section-header" style="margin-top:1.5rem">Risk-Time Tradeoff</div>',
         unsafe_allow_html=True,
     )
-    if TRADEOFF_PNG.exists():
+    if routing_source == "live":
+        # Build fresh so it reflects the live results just computed, rather
+        # than the static image saved from the April 2024 notebook run.
+        fig_tradeoff = px.scatter(
+            rerouting_df,
+            x="extra_time_min",
+            y="risk_reduction",
+            hover_data=["route_id", "origin", "destination"],
+            labels={
+                "extra_time_min": "Extra Travel Time (minutes)",
+                "risk_reduction": "Flood Risk Reduction",
+            },
+            color_discrete_sequence=["#1a6fc4"],
+        )
+        fig_tradeoff.update_traces(marker=dict(size=9, opacity=0.75))
+        fig_tradeoff.add_hline(y=0, line_dash="dash", line_color="#4a5568")
+        fig_tradeoff.add_vline(x=0, line_dash="dash", line_color="#4a5568")
+        fig_tradeoff.update_layout(
+            paper_bgcolor="#0a0f1e",
+            plot_bgcolor="#0d1117",
+            font_color="#e2e8f0",
+            font_family="DM Mono",
+            xaxis=dict(gridcolor="#1e2d3d"),
+            yaxis=dict(gridcolor="#1e2d3d"),
+            margin=dict(t=20, b=20, l=20, r=20),
+        )
+        st.plotly_chart(fig_tradeoff, width="stretch")
+    elif TRADEOFF_PNG.exists():
         st.image(str(TRADEOFF_PNG), width="stretch")
     else:
         st.info(
@@ -1345,8 +1631,10 @@ elif page == "AI Assistant":
         "--- PROJECT OVERVIEW ---\n"
         "The prediction model is XGBoost trained on the following features:\n"
         "  Terrain  : elevation (mean, min, max, range in metres), slope (degrees)\n"
-        "  Rainfall : cumulative 90-day (mm), max single-day (mm), 7-day pre-flood (mm)\n"
+        "  Rainfall : cumulative 90-day (mm), max single-day (mm), recent 7-day (mm)\n"
         "  Population: 2009 Kenya census ward population\n\n"
+        f"--- ACTIVE RAINFALL SOURCE ---\n"
+        f"{rainfall_summary(rainfall_meta) if use_live else 'Historical CHIRPS data from the April 2024 flood event.'}\n\n"
         "Key insight: flooding in Kenya is primarily terrain-driven at ward scale.\n"
         "Low-lying wards flood not because they receive more rain but because water drains\n"
         "into them from surrounding higher ground. Elevation features dominate predictions;\n"
