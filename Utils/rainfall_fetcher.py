@@ -201,9 +201,7 @@ def _assign_rainfall(
 ) -> gpd.GeoDataFrame:
     keys = list(zip(df["_grid_lat"], df["_grid_lon"]))
     for col in RAIN_COLS:
-        df[col] = [
-            grid_features.get(k, {}).get(col, 0.0) for k in keys
-        ]
+        df[col] = [grid_features.get(k, {}).get(col, 0.0) for k in keys]
     return df.drop(columns=["_grid_lat", "_grid_lon"])
 
 
@@ -247,9 +245,7 @@ def apply_live_rainfall(
 
     if not grid_features:
         try:
-            grid_features = fetch_grid_rainfall(
-                grid_points, on_progress=on_progress
-            )
+            grid_features = fetch_grid_rainfall(grid_points, on_progress=on_progress)
             meta["fetched_at"] = datetime.now(timezone.utc).isoformat()
             _save_file_cache(grid_features, meta)
         except Exception:
