@@ -621,6 +621,17 @@ with st.sidebar:
                 "africastalking not installed.\n\n" "Run: `pip install africastalking`"
             )
         else:
+            if st.button("💰 Check AT account balance"):
+                try:
+                    africastalking.initialize(
+                        username=st.secrets.get("AT_USERNAME", "sandbox"),
+                        api_key=st.secrets["AT_API_KEY"],
+                    )
+                    app_data = africastalking.Application.fetch_application_data()
+                    st.info(f"Balance: {app_data['UserData']['balance']}")
+                except Exception as e:
+                    st.error(f"Balance check failed: {e}")
+
             # ── Recipient input ──────────────────────────────────────────────
             sms_input_mode = st.radio(
                 "Recipients",
@@ -709,7 +720,7 @@ with st.sidebar:
                 use_container_width=True,
             ):
                 try:
-                    at_username = st.secrets.get("AT_USERNAME", "sandbox")
+                    at_username = st.secrets.get("AT_USERNAME", "NgundoMuithya")
                     at_api_key = st.secrets["AT_API_KEY"]
 
                     africastalking.initialize(
@@ -734,9 +745,14 @@ with st.sidebar:
                         st.success(f"✅ Sent to {len(success)} recipient(s).")
                     if failed:
                         st.warning(
-                            f"⚠️ Failed for {len(failed)} number(s): "
-                            + ", ".join(r["number"] for r in failed)
+                            "⚠️ Failed for:\n"
+                            + "\n".join(
+                                f"- {r.get('number')}: **{r.get('status')}**"
+                                for r in failed
+                            )
                         )
+                        with st.expander("Raw AT response (debug)"):
+                            st.json(response)
 
                     # Log to session state so operator can review sends
                     if "sms_log" not in st.session_state:
