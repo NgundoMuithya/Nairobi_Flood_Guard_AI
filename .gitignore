@@ -12,3 +12,7 @@ inspect.ipynb
 
 # API Key
 .streamlit/
+
+# Pycache
+__pycache__/
+*.pyc
