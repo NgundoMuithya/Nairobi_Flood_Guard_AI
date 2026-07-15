@@ -94,7 +94,12 @@ def _fetch_batch(
     past_days: int = PAST_DAYS,
     forecast_days: int = FORECAST_DAYS,
 ) -> list[dict[str, Any]]:
-    """Fetch one batch with retries and backoff on HTTP 429."""
+    """Fetch one batch with retries and backoff on HTTP 429.
+
+    Streamlit Cloud occasionally behaves differently from local environments
+    around outbound POST requests, so try the documented GET request first and
+    keep POST as a fallback for long coordinate lists.
+    """
     params = {
         "latitude": ",".join(f"{lat:.4f}" for lat in lats),
         "longitude": ",".join(f"{lon:.4f}" for lon in lons),
@@ -103,39 +108,71 @@ def _fetch_batch(
         "forecast_days": forecast_days,
         "timezone": "Africa/Nairobi",
     }
+    headers = {
+        "User-Agent": "Nairobi-Flood-Guard/1.0 (+https://streamlit.io)",
+        "Accept": "application/json",
+    }
 
     last_error: Exception | None = None
-    for attempt in range(MAX_RETRIES):
-        try:
-            resp = requests.post(
-                OPEN_METEO_URL, data=params, timeout=REQUEST_TIMEOUT_SEC
-            )
+    last_detail = "no response"
+    methods = ("GET", "POST")
 
-            if resp.status_code == 429:
-                retry_after = resp.headers.get("Retry-After")
-                wait = float(retry_after) if retry_after else min(20, 5 * (2**attempt))
-                time.sleep(wait)
+    for attempt in range(MAX_RETRIES):
+        for method in methods:
+            try:
+                if method == "GET":
+                    resp = requests.get(
+                        OPEN_METEO_URL,
+                        params=params,
+                        headers=headers,
+                        timeout=REQUEST_TIMEOUT_SEC,
+                    )
+                else:
+                    resp = requests.post(
+                        OPEN_METEO_URL,
+                        data=params,
+                        headers=headers,
+                        timeout=REQUEST_TIMEOUT_SEC,
+                    )
+
+                if resp.status_code == 429:
+                    retry_after = resp.headers.get("Retry-After")
+                    wait = (
+                        float(retry_after)
+                        if retry_after
+                        else min(20, 5 * (2**attempt))
+                    )
+                    last_detail = f"{method} HTTP 429 rate limited"
+                    time.sleep(wait)
+                    break
+
+                if resp.status_code == 414 and method == "GET":
+                    last_detail = "GET HTTP 414 URI too long; retrying with POST"
+                    continue
+
+                if 400 <= resp.status_code < 500:
+                    raise RuntimeError(
+                        f"Open-Meteo rejected {method} request "
+                        f"(HTTP {resp.status_code}): {resp.text[:300]}"
+                    )
+
+                resp.raise_for_status()
+                data = resp.json()
+                return data if isinstance(data, list) else [data]
+
+            except RuntimeError:
+                raise
+            except requests.RequestException as exc:
+                last_error = exc
+                last_detail = f"{method} {exc.__class__.__name__}: {exc}"
                 continue
 
-            if 400 <= resp.status_code < 500:
-                raise RuntimeError(
-                    f"Open-Meteo rejected request (HTTP {resp.status_code}): "
-                    f"{resp.text[:300]}"
-                )
-
-            resp.raise_for_status()
-            data = resp.json()
-            return data if isinstance(data, list) else [data]
-
-        except RuntimeError:
-            raise
-        except requests.RequestException as exc:
-            last_error = exc
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(min(10, 2 * (2**attempt)))
+        if attempt < MAX_RETRIES - 1:
+            time.sleep(min(10, 2 * (2**attempt)))
 
     raise RuntimeError(
-        f"Open-Meteo request failed after {MAX_RETRIES} attempts"
+        f"Open-Meteo request failed after {MAX_RETRIES} attempts; "
+        f"last error: {last_detail}"
     ) from last_error
 
 
