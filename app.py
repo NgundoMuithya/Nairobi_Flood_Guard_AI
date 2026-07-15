@@ -34,12 +34,7 @@ from groq import Groq
 import plotly.express as px
 import plotly.graph_objects as go
 
-from Utils.rainfall_fetcher import (
-    RAIN_COLS,
-    apply_forecast_rainfall,
-    apply_live_rainfall,
-    rainfall_summary,
-)
+from Utils.rainfall_fetcher import RAIN_COLS, apply_live_rainfall, rainfall_summary
 from Utils.live_routing import run_live_rerouting
 
 try:
@@ -492,6 +487,25 @@ def get_affected_stop_ids(nairobi_df, stops_df, flood_threshold):
     return set(joined["stop_id"].tolist())
 
 
+def apply_horizon_rainfall(gdf, horizon_hours: int, use_cache: bool):
+    try:
+        return apply_live_rainfall(
+            gdf,
+            use_cache=use_cache,
+            horizon_hours=horizon_hours,
+        )
+    except TypeError as exc:
+        if "horizon_hours" not in str(exc):
+            raise
+        if horizon_hours == 0:
+            return apply_live_rainfall(gdf, use_cache=use_cache)
+        raise RuntimeError(
+            "The deployed rainfall_fetcher.py does not support forecast "
+            "horizons yet. Redeploy Utils/rainfall_fetcher.py with the "
+            "time-series forecast changes."
+        ) from exc
+
+
 @st.cache_data(ttl=21600, show_spinner=False)
 def get_open_meteo_ward_dataframe(
     cache_bust: int, skip_file_cache: bool, horizon_hours: int
@@ -505,18 +519,11 @@ def get_open_meteo_ward_dataframe(
     base = load_data()
     nairobi_mask = base["county"].str.lower() == "nairobi"
 
-    if horizon_hours == 0:
-        forecast_nairobi, meta = apply_live_rainfall(
-            base[nairobi_mask],
-            use_cache=not skip_file_cache,
-            horizon_hours=0,
-        )
-    else:
-        forecast_nairobi, meta = apply_forecast_rainfall(
-            base[nairobi_mask],
-            horizon_hours=horizon_hours,
-            use_cache=not skip_file_cache,
-        )
+    forecast_nairobi, meta = apply_horizon_rainfall(
+        base[nairobi_mask],
+        horizon_hours=horizon_hours,
+        use_cache=not skip_file_cache,
+    )
 
     combined = base.copy()
     combined.loc[nairobi_mask, RAIN_COLS] = forecast_nairobi[RAIN_COLS].values
