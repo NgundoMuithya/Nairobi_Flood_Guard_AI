@@ -34,7 +34,12 @@ from groq import Groq
 import plotly.express as px
 import plotly.graph_objects as go
 
-from Utils.rainfall_fetcher import RAIN_COLS, apply_live_rainfall, rainfall_summary
+from Utils.rainfall_fetcher import (
+    RAIN_COLS,
+    apply_forecast_rainfall,
+    apply_live_rainfall,
+    rainfall_summary,
+)
 from Utils.live_routing import run_live_rerouting
 
 try:
@@ -386,6 +391,13 @@ def generate_predictions(model, df):
     return model.predict_proba(X)[:, 1]
 
 
+def add_risk_columns(model, df):
+    scored = df.copy()
+    scored["flood_prob"] = generate_predictions(model, scored)
+    scored["risk_label"], _ = zip(*scored["flood_prob"].map(risk_label))
+    return scored
+
+
 # Build choropleth - not cached since Folium maps with lambdas can't be pickled
 def build_choropleth(map_df, centre_lat, centre_lon, zoom):
     fmap = folium.Map(
@@ -481,25 +493,33 @@ def get_affected_stop_ids(nairobi_df, stops_df, flood_threshold):
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
-def get_live_ward_dataframe(cache_bust: int, skip_file_cache: bool):
+def get_open_meteo_ward_dataframe(
+    cache_bust: int, skip_file_cache: bool, horizon_hours: int
+):
     """
-    Fetch live rainfall for Nairobi wards only (~91 wards) and merge them into
-    the full nationwide dataframe; other counties keep their historical CHIRPS
-    values. Route optimization and SMS alerts only ever operate on Nairobi, so
-    this is the part of the country that actually needs to be live - fetching
-    live rainfall for all ~1,450 wards nationwide was the main cause of the
-    slow (~15 min) refresh.
+    Fetch Open-Meteo rainfall for Nairobi wards only (~91 wards) and merge it
+    into the full nationwide dataframe; other counties keep their historical
+    CHIRPS values. Horizon 0 is the live/as-of-now dataset, while 24 and 48 use
+    forecast precipitation rolled into the model rainfall windows.
     """
     base = load_data()
     nairobi_mask = base["county"].str.lower() == "nairobi"
 
-    live_nairobi, meta = apply_live_rainfall(
-        base[nairobi_mask],
-        use_cache=not skip_file_cache,
-    )
+    if horizon_hours == 0:
+        forecast_nairobi, meta = apply_live_rainfall(
+            base[nairobi_mask],
+            use_cache=not skip_file_cache,
+            horizon_hours=0,
+        )
+    else:
+        forecast_nairobi, meta = apply_forecast_rainfall(
+            base[nairobi_mask],
+            horizon_hours=horizon_hours,
+            use_cache=not skip_file_cache,
+        )
 
     combined = base.copy()
-    combined.loc[nairobi_mask, RAIN_COLS] = live_nairobi[RAIN_COLS].values
+    combined.loc[nairobi_mask, RAIN_COLS] = forecast_nairobi[RAIN_COLS].values
     meta["scope"] = (
         f"Nairobi ({int(nairobi_mask.sum())} wards) · other counties remain historical"
     )
@@ -539,21 +559,33 @@ with st.sidebar:
     st.markdown("### Rainfall Data")
     data_mode = st.radio(
         "Source",
-        ["Live (Open-Meteo)", "Historical (Apr 2024)"],
+        [
+            "Live (Open-Meteo)",
+            "Historical (Apr 2024)",
+            "24hr Prediction",
+            "48hr Prediction",
+        ],
         help=(
-            "Live mode fetches the last 90 days of precipitation from Open-Meteo "
-            "and updates ward rainfall features before each prediction."
+            "Live mode uses the latest Open-Meteo rainfall. The 24hr and 48hr "
+            "prediction modes roll forecast precipitation into the model's "
+            "90-day, max-daily, and 7-day rainfall features before prediction."
         ),
     )
-    use_live = data_mode.startswith("Live")
-    if use_live:
+    forecast_horizon_hours = {
+        "Live (Open-Meteo)": 0,
+        "24hr Prediction": 24,
+        "48hr Prediction": 48,
+    }.get(data_mode)
+    use_open_meteo = forecast_horizon_hours is not None
+    use_live = forecast_horizon_hours == 0
+    if use_open_meteo:
         if st.button("Refresh rainfall now", use_container_width=True):
             st.session_state["force_rainfall_refresh"] = True
             st.session_state["rainfall_cache_bust"] = (
                 st.session_state.get("rainfall_cache_bust", 0) + 1
             )
         st.caption(
-            "Live rainfall applies to Nairobi's wards only (where route "
+            "Open-Meteo rainfall applies to Nairobi's wards only (where route "
             "optimization and alerts operate). Other counties keep the "
             "historical Apr 2024 data. First fetch typically takes a few "
             "seconds; results are cached for 6 hours."
@@ -574,17 +606,22 @@ force_refresh = st.session_state.pop("force_rainfall_refresh", False)
 cache_bust = st.session_state.get("rainfall_cache_bust", 0)
 rainfall_meta: dict = {"source": "historical", "label": "CHIRPS Feb-Apr 2024"}
 
-if use_live:
+if use_open_meteo:
     try:
         if force_refresh:
-            get_live_ward_dataframe.clear()
-        with st.spinner(
-            "Loading live rainfall… (first fetch may take ~2 min due to API limits)"
-        ):
-            df, rainfall_meta = get_live_ward_dataframe(cache_bust, force_refresh)
+            get_open_meteo_ward_dataframe.clear()
+        spinner_label = (
+            "Loading live rainfall..."
+            if forecast_horizon_hours == 0
+            else f"Loading {forecast_horizon_hours}hr forecast rainfall..."
+        )
+        with st.spinner(f"{spinner_label} (first fetch may take ~2 min)"):
+            df, rainfall_meta = get_open_meteo_ward_dataframe(
+                cache_bust, force_refresh, int(forecast_horizon_hours)
+            )
     except Exception as exc:
         st.warning(
-            f"Could not fetch live rainfall ({exc}). "
+            f"Could not fetch Open-Meteo rainfall ({exc}). "
             "Falling back to historical Apr 2024 data."
         )
         df = base_df.copy()
@@ -592,8 +629,7 @@ if use_live:
 else:
     df = base_df.copy()
 
-df["flood_prob"] = generate_predictions(model, df)
-df["risk_label"], _ = zip(*df["flood_prob"].map(risk_label))
+df = add_risk_columns(model, df)
 nairobi = df[df["county"].str.lower() == "nairobi"].copy()
 
 n_critical = (df["flood_prob"] >= 0.70).sum()
@@ -607,7 +643,7 @@ with st.sidebar:
     st.metric("Critical Risk", int(n_critical))
     st.metric("High Risk", int(n_high))
     st.metric("Above Threshold", int(n_total))
-    if use_live:
+    if use_open_meteo:
         st.caption(rainfall_summary(rainfall_meta))
     st.markdown("---")
 
@@ -786,7 +822,9 @@ with st.sidebar:
 
     st.markdown("---")
     rainfall_label = (
-        rainfall_summary(rainfall_meta) if use_live else "Rainfall: CHIRPS Feb-Apr 2024"
+        rainfall_summary(rainfall_meta)
+        if use_open_meteo
+        else "Rainfall: CHIRPS Feb-Apr 2024"
     )
     st.markdown(
         f"<span style='font-size:0.65rem;color:#4a5568;'>Model: XGBoost · "
@@ -801,12 +839,14 @@ with st.sidebar:
 # =============================================================================
 if page == "Flood Risk Dashboard":
 
-    if use_live:
+    if use_open_meteo:
+        mode_label = "Live mode" if use_live else f"{forecast_horizon_hours}hr prediction mode"
         st.info(
-            f"**Live mode** — predictions use current rainfall "
-            f"({rainfall_summary(rainfall_meta)}). "
+            f"**{mode_label}** — predictions use rainfall features from "
+            f"{rainfall_summary(rainfall_meta)}. "
             "Terrain features remain static (SRTM). "
-            "Switch to Historical in the sidebar to compare with the Apr 2024 event."
+            "Switch rainfall source in the sidebar to compare live, historical, "
+            "24hr, and 48hr flood-risk maps."
         )
 
     st.markdown(
@@ -1650,7 +1690,7 @@ elif page == "AI Assistant":
         "  Rainfall : cumulative 90-day (mm), max single-day (mm), recent 7-day (mm)\n"
         "  Population: 2009 Kenya census ward population\n\n"
         f"--- ACTIVE RAINFALL SOURCE ---\n"
-        f"{rainfall_summary(rainfall_meta) if use_live else 'Historical CHIRPS data from the April 2024 flood event.'}\n\n"
+        f"{rainfall_summary(rainfall_meta) if use_open_meteo else 'Historical CHIRPS data from the April 2024 flood event.'}\n\n"
         "Key insight: flooding in Kenya is primarily terrain-driven at ward scale.\n"
         "Low-lying wards flood not because they receive more rain but because water drains\n"
         "into them from surrounding higher ground. Elevation features dominate predictions;\n"
