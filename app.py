@@ -186,16 +186,19 @@ div[data-testid="stMetric"] {
 
 
 # -- Helpers ------------------------------------------------------------------
-def flood_prob_fingerprint(wards_gdf, alpha, threshold) -> str:
-    """Hash of ward flood_prob values + alpha/threshold - changes whenever
-    the underlying risk data (or routing params) actually change, so the
-    live-routing cache invalidates correctly without hashing the full gdf."""
+def flood_prob_fingerprint(wards_gdf, alpha, threshold, horizon_hours=0) -> str:
+    """Hash of ward flood_prob values + alpha/threshold/horizon - changes
+    whenever the underlying risk data (or routing params) actually change,
+    so the live-routing cache invalidates correctly without hashing the
+    full gdf."""
     import hashlib
 
     vals = tuple(
         np.round(wards_gdf.sort_values("ward")["flood_prob"].values, 4).tolist()
     )
-    return hashlib.md5(f"{vals}-{alpha}-{threshold}".encode()).hexdigest()
+    return hashlib.md5(
+        f"{vals}-{alpha}-{threshold}-{horizon_hours}".encode()
+    ).hexdigest()
 
 
 def risk_label(prob: float) -> tuple[str, str]:
@@ -1225,20 +1228,27 @@ elif page == "Route Optimization":
     routing_meta: dict = {}
     routes, trips, shapes, stops, stop_times = load_gtfs()
 
-    if use_live:
+    mode_label = (
+        "live"
+        if use_live
+        else f"{forecast_horizon_hours}hr forecast" if use_open_meteo else "historical"
+    )
+
+    if use_open_meteo:
         if not OSMNX_AVAILABLE:
             st.warning(
-                "osmnx isn't installed, so live rerouting isn't available "
-                "here. Falling back to the historical (Apr 2024) rerouting "
-                "results below. Install with `pip install osmnx`."
+                "osmnx isn't installed, so recomputed rerouting isn't "
+                "available here. Falling back to the historical (Apr 2024) "
+                "rerouting results below. Install with `pip install osmnx`."
             )
         else:
             st.info(
-                "**Live routing** — recompute the flood-weighted road network "
-                "and rerun Dijkstra using current Nairobi flood risk. This "
-                "takes a few seconds (it's not run automatically on every "
-                "interaction, since it reruns Dijkstra across ~87k road "
-                "network nodes for every affected route)."
+                f"**{mode_label.capitalize()} routing** — recompute the "
+                "flood-weighted road network and rerun Dijkstra using the "
+                f"{mode_label} Nairobi flood risk selected in the sidebar. "
+                "This takes a few seconds (it's not run automatically on "
+                "every interaction, since it reruns Dijkstra across ~87k "
+                "road network nodes for every affected route)."
             )
             alpha = st.slider(
                 "α (flood-cost multiplier)",
@@ -1249,7 +1259,7 @@ elif page == "Route Optimization":
                 help="Higher α makes the algorithm avoid flooded roads more "
                 "aggressively, at the cost of longer detours.",
             )
-            if st.button("🔄 Recompute live routes", use_container_width=True):
+            if st.button(f"🔄 Recompute {mode_label} routes", use_container_width=True):
                 st.session_state["force_live_routes"] = True
             st.session_state.setdefault("live_routes_alpha", alpha)
 
@@ -1259,7 +1269,9 @@ elif page == "Route Optimization":
                 ):
                     try:
                         G = load_road_graph()
-                        fingerprint = flood_prob_fingerprint(nairobi, alpha, threshold)
+                        fingerprint = flood_prob_fingerprint(
+                            nairobi, alpha, threshold, forecast_horizon_hours
+                        )
                         rerouting_df, route_geoms, routing_meta = get_live_routes(
                             G,
                             nairobi,
@@ -1271,9 +1283,10 @@ elif page == "Route Optimization":
                             fingerprint,
                         )
                         routing_source = "live"
+                        routing_meta["mode_label"] = mode_label
                     except Exception as exc:
                         st.warning(
-                            f"Live rerouting failed ({exc}). "
+                            f"Recomputing {mode_label} routing failed ({exc}). "
                             "Falling back to historical results."
                         )
 
@@ -1282,8 +1295,8 @@ elif page == "Route Optimization":
             st.info(
                 "No historical rerouting data on disk yet. "
                 + (
-                    "Click **Recompute live routes** above to generate results."
-                    if use_live and OSMNX_AVAILABLE
+                    f"Click **Recompute {mode_label} routes** above to generate results."
+                    if use_open_meteo and OSMNX_AVAILABLE
                     else "Run Route_Optimization/route_optimization.ipynb first."
                 )
             )
@@ -1293,8 +1306,8 @@ elif page == "Route Optimization":
 
     if routing_source == "live":
         st.success(
-            f"Showing **live** rerouting (α={routing_meta['alpha']:.0f}, "
-            f"threshold={routing_meta['threshold']:.2f}) · "
+            f"Showing **{routing_meta.get('mode_label', mode_label)}** rerouting "
+            f"(α={routing_meta['alpha']:.0f}, threshold={routing_meta['threshold']:.2f}) · "
             f"{routing_meta['rerouted_routes']} of "
             f"{routing_meta['total_affected_routes']} affected routes rerouted."
         )
