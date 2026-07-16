@@ -497,8 +497,18 @@ def apply_horizon_rainfall(gdf, horizon_hours: int, use_cache: bool):
             visualcrossing_api_key=vc_key,
         )
     except TypeError as exc:
-        if "horizon_hours" not in str(exc) and "visualcrossing_api_key" not in str(exc):
-            raise
+        # Only treat this as "deployed rainfall_fetcher.py predates horizon
+        # support" if it's unmistakably a call-signature mismatch on
+        # apply_live_rainfall itself - not any TypeError that happens to
+        # mention these identifiers internally (which was swallowing real
+        # bugs on the horizon!=0 code path and mislabeling them).
+        msg = str(exc)
+        is_signature_mismatch = "apply_live_rainfall()" in msg and (
+            "unexpected keyword argument" in msg
+            or ("missing" in msg and "argument" in msg)
+        )
+        if not is_signature_mismatch:
+            raise  # surface the real error instead of masking it
         if horizon_hours == 0:
             return apply_live_rainfall(gdf, use_cache=use_cache)
         raise RuntimeError(
