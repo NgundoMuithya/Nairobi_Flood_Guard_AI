@@ -488,14 +488,16 @@ def get_affected_stop_ids(nairobi_df, stops_df, flood_threshold):
 
 
 def apply_horizon_rainfall(gdf, horizon_hours: int, use_cache: bool):
+    vc_key = st.secrets.get("VISUALCROSSING_API_KEY")
     try:
         return apply_live_rainfall(
             gdf,
             use_cache=use_cache,
             horizon_hours=horizon_hours,
+            visualcrossing_api_key=vc_key,
         )
     except TypeError as exc:
-        if "horizon_hours" not in str(exc):
+        if "horizon_hours" not in str(exc) and "visualcrossing_api_key" not in str(exc):
             raise
         if horizon_hours == 0:
             return apply_live_rainfall(gdf, use_cache=use_cache)
@@ -847,7 +849,9 @@ with st.sidebar:
 if page == "Flood Risk Dashboard":
 
     if use_open_meteo:
-        mode_label = "Live mode" if use_live else f"{forecast_horizon_hours}hr prediction mode"
+        mode_label = (
+            "Live mode" if use_live else f"{forecast_horizon_hours}hr prediction mode"
+        )
         st.info(
             f"**{mode_label}** — predictions use rainfall features from "
             f"{rainfall_summary(rainfall_meta)}. "
