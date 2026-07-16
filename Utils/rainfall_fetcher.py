@@ -27,6 +27,7 @@ import numpy as np
 import requests
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+VISUALCROSSING_URL = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
 NAIROBI_TZ = timezone(timedelta(hours=3))  # EAT, fixed offset, no DST
 DEFAULT_GRID_RES = 0.25  # degrees (~28 km; fewer API calls than 0.1 deg)
 # Open-Meteo accepts up to 1000 locations per request (free tier: 600 req/min,
@@ -138,9 +139,7 @@ def _fetch_batch(
                 if resp.status_code == 429:
                     retry_after = resp.headers.get("Retry-After")
                     wait = (
-                        float(retry_after)
-                        if retry_after
-                        else min(20, 5 * (2**attempt))
+                        float(retry_after) if retry_after else min(20, 5 * (2**attempt))
                     )
                     last_detail = f"{method} HTTP 429 rate limited"
                     time.sleep(wait)
@@ -174,6 +173,68 @@ def _fetch_batch(
         f"Open-Meteo request failed after {MAX_RETRIES} attempts; "
         f"last error: {last_detail}"
     ) from last_error
+
+
+def _fetch_visualcrossing_point(
+    lat: float,
+    lon: float,
+    api_key: str,
+    past_days: int,
+    forecast_days: int,
+) -> dict[str, Any]:
+    """One grid point per request - Visual Crossing's Timeline API doesn't
+    support Open-Meteo-style comma-separated multi-location batching. Shapes
+    the response identically to Open-Meteo's so downstream feature code
+    (_compute_horizon_features etc.) needs no changes."""
+    start = (datetime.now(NAIROBI_TZ) - timedelta(days=past_days)).date().isoformat()
+    end = (datetime.now(NAIROBI_TZ) + timedelta(days=forecast_days)).date().isoformat()
+    url = f"{VISUALCROSSING_URL}/{lat:.4f},{lon:.4f}/{start}/{end}"
+
+    resp = requests.get(
+        url,
+        params={
+            "key": api_key,
+            "unitGroup": "metric",
+            "include": "days",
+            "elements": "datetime,precip",
+            "contentType": "json",
+        },
+        timeout=REQUEST_TIMEOUT_SEC,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    days = data.get("days", [])
+    return {
+        "daily": {
+            "time": [d["datetime"] for d in days],
+            "precipitation_sum": [d.get("precip") or 0.0 for d in days],
+        }
+    }
+
+
+def fetch_grid_rainfall_visualcrossing(
+    grid_points: list[tuple[float, float]],
+    api_key: str,
+    past_days: int = PAST_DAYS,
+    forecast_days: int = FORECAST_DAYS,
+    horizons_hours: tuple[int, ...] = FORECAST_HORIZONS_HOURS,
+) -> dict[tuple[float, float], dict[str, dict[str, float]]]:
+    """1,000 free records/day, rate-limited per API key (not per shared IP),
+    so this works fine on platforms like Streamlit Cloud where Open-Meteo's
+    keyless per-IP limit gets exhausted by unrelated apps sharing the same
+    egress IP. Each (past_days + forecast_days) window costs ~1 record per
+    day per point, so keep grid_points small and cache aggressively."""
+    features: dict[tuple[float, float], dict[str, dict[str, float]]] = {}
+    for lat, lon in grid_points:
+        payload = _fetch_visualcrossing_point(
+            lat, lon, api_key, past_days, forecast_days
+        )
+        precip = payload["daily"]["precipitation_sum"]
+        dates = payload["daily"]["time"]
+        features[(lat, lon)] = _compute_horizon_features(
+            precip, dates, horizons_hours=horizons_hours
+        )
+    return features
 
 
 def fetch_grid_rainfall(
@@ -301,12 +362,17 @@ def apply_live_rainfall(
     max_cache_age_hours: float = 6.0,
     horizon_hours: int = 0,
     on_progress: Any | None = None,
+    visualcrossing_api_key: str | None = None,
 ) -> tuple[gpd.GeoDataFrame, dict[str, Any]]:
     """
     Replace static rainfall columns with Open-Meteo values for a forecast horizon.
 
     Returns a copy of the GeoDataFrame and metadata about the fetch.
-    Falls back to stale on-disk cache (up to 24 h old) if the API is unavailable.
+    Tries Open-Meteo first; if that fails (e.g. shared-IP rate limiting on
+    platforms like Streamlit Cloud) and `visualcrossing_api_key` is provided,
+    falls back to Visual Crossing (rate-limited per API key, not per IP).
+    Falls back further to stale on-disk cache (up to 24 h old), and finally
+    lets the exception propagate if nothing is available.
     """
     df = gdf.copy()
     centroids = df.geometry.centroid
@@ -343,17 +409,40 @@ def apply_live_rainfall(
     if not grid_features:
         try:
             grid_features = fetch_grid_rainfall(grid_points, on_progress=on_progress)
+            meta["source"] = "Open-Meteo Forecast API"
             meta["fetched_at"] = datetime.now(timezone.utc).isoformat()
             _save_file_cache(grid_features, meta)
-        except Exception:
-            stale = _load_file_cache(max_age_hours=24.0)
-            if stale is not None and _cache_has_horizon(stale, horizon_hours):
-                grid_features = _parse_cached_grid(stale)
-                meta["fetched_at"] = stale["fetched_at"]
-                meta["from_cache"] = True
-                meta["stale_cache"] = True
+        except Exception as open_meteo_exc:
+            if visualcrossing_api_key:
+                try:
+                    grid_features = fetch_grid_rainfall_visualcrossing(
+                        grid_points, visualcrossing_api_key
+                    )
+                    meta["source"] = "Visual Crossing (fallback)"
+                    meta["fetched_at"] = datetime.now(timezone.utc).isoformat()
+                    meta["fallback_reason"] = str(open_meteo_exc)
+                    _save_file_cache(grid_features, meta)
+                except Exception as vc_exc:
+                    stale = _load_file_cache(max_age_hours=24.0)
+                    if stale is not None and _cache_has_horizon(stale, horizon_hours):
+                        grid_features = _parse_cached_grid(stale)
+                        meta["fetched_at"] = stale["fetched_at"]
+                        meta["from_cache"] = True
+                        meta["stale_cache"] = True
+                    else:
+                        raise RuntimeError(
+                            f"Open-Meteo failed ({open_meteo_exc}); "
+                            f"Visual Crossing fallback also failed ({vc_exc})"
+                        ) from vc_exc
             else:
-                raise
+                stale = _load_file_cache(max_age_hours=24.0)
+                if stale is not None and _cache_has_horizon(stale, horizon_hours):
+                    grid_features = _parse_cached_grid(stale)
+                    meta["fetched_at"] = stale["fetched_at"]
+                    meta["from_cache"] = True
+                    meta["stale_cache"] = True
+                else:
+                    raise
 
     df = _assign_rainfall(df, grid_features, horizon_hours=horizon_hours)
     return df, meta
@@ -401,8 +490,11 @@ def rainfall_summary(meta: dict[str, Any]) -> str:
     scope_note = f" · {meta['scope']}" if meta.get("scope") else ""
     horizon = int(meta.get("horizon_hours", 0) or 0)
     mode = "Live" if horizon == 0 else f"+{horizon}h forecast"
+    provider = meta.get("source", "Open-Meteo Forecast API").replace(
+        " Forecast API", ""
+    )
 
     if meta.get("stale_cache"):
-        return f"{mode} · Open-Meteo · stale cache from {ts_label}{scope_note}"
+        return f"{mode} · {provider} · stale cache from {ts_label}{scope_note}"
     cache_note = " (cached)" if meta.get("from_cache") else ""
-    return f"{mode} · Open-Meteo · updated {ts_label}{cache_note}{scope_note}"
+    return f"{mode} · {provider} · updated {ts_label}{cache_note}{scope_note}"
