@@ -48,7 +48,7 @@ def compute_edge_flood_map(
 ) -> dict[tuple[Any, Any, int], float]:
     """Assign each road edge the flood_prob of the ward its midpoint falls in.
     Edges outside any ward default to 0.0."""
-    edges_gdf = ox.graph_to_gdfs(G, nodes=False, edges=True).reset_index()
+    edges_gdf = ox.graph_to_gdfs(G, nodes=False, edges=True)[["geometry"]].reset_index()
     edges_gdf["midpoint"] = edges_gdf["geometry"].interpolate(0.5, normalized=True)
     edges_mid = gpd.GeoDataFrame(
         edges_gdf[["u", "v", "key", "midpoint"]], geometry="midpoint", crs=WGS84
@@ -79,10 +79,12 @@ def build_flood_weighted_graph(
     Copies rather than mutates so a cached base graph can be reused across
     different alpha/threshold values without cross-contamination."""
     G = G.copy()
-    for u, v, key, data in G.edges(keys=True, data=True):
-        travel_time = data.get("travel_time", 60)
-        flood_prob = flood_prob_map.get((u, v, key), 0.0)
-        data["flood_cost"] = travel_time * (1 + alpha * flood_prob)
+    flood_costs = {
+        (u, v, key): data.get("travel_time", 60)
+        * (1 + alpha * flood_prob_map.get((u, v, key), 0.0))
+        for u, v, key, data in G.edges(keys=True, data=True)
+    }
+    nx.set_edge_attributes(G, flood_costs, "flood_cost")
     return G
 
 
@@ -110,14 +112,29 @@ def find_alternative_route(
     stop_times: pd.DataFrame,
     stops: pd.DataFrame,
     flood_prob_map: dict[tuple[Any, Any, int], float],
+    orig_node: Any = None,
+    dest_node: Any = None,
+    terminals: tuple | None = None,
 ) -> dict | None:
     """Find the flood-cost-minimizing path between a route's terminal stops.
-    Returns None if terminals can't be resolved or no path exists."""
-    try:
-        origin, destination = _get_route_terminals(route_id, trips, stop_times, stops)
+    Returns None if terminals can't be resolved or no path exists.
 
-        orig_node = ox.nearest_nodes(G, X=origin[1], Y=origin[0])
-        dest_node = ox.nearest_nodes(G, X=destination[1], Y=destination[0])
+    `orig_node`/`dest_node`/`terminals` let a caller (run_live_rerouting)
+    pass in values it already resolved in a batch, avoiding rebuilding
+    OSMnx's spatial index once per route. Left as None, behavior is
+    identical to the original single-route lookup."""
+    try:
+        if terminals is not None:
+            origin, destination = terminals
+        else:
+            origin, destination = _get_route_terminals(
+                route_id, trips, stop_times, stops
+            )
+
+        if orig_node is None:
+            orig_node = ox.nearest_nodes(G, X=origin[1], Y=origin[0])
+        if dest_node is None:
+            dest_node = ox.nearest_nodes(G, X=destination[1], Y=destination[0])
 
         original_path = nx.shortest_path(G, orig_node, dest_node, weight="travel_time")
         alternative_path = nx.shortest_path(
@@ -220,10 +237,63 @@ def run_live_rerouting(
         wards_gdf, stops_gdf, stop_times, trips, threshold
     )
 
+    # Resolve every affected route's terminals up front, then look up
+    # nearest road-network nodes for all of them in a single batched call.
+    # ox.nearest_nodes rebuilds a spatial index over the graph's ~87k nodes
+    # on every call, so doing this once instead of twice per route is the
+    # difference between one index build and ~2N of them.
+    terminals_by_route: dict[str, tuple] = {}
+    for route_id in affected_route_ids:
+        try:
+            terminals_by_route[route_id] = _get_route_terminals(
+                route_id, trips, stop_times, stops_df
+            )
+        except Exception:
+            continue  # this route is skipped below, same as pre-batching behavior
+
+    node_lookup: dict[str, tuple] = {}
+    if terminals_by_route:
+        route_order = list(terminals_by_route)
+        lats, lons = [], []
+        for route_id in route_order:
+            origin, destination = terminals_by_route[route_id]
+            lats += [origin[0], destination[0]]
+            lons += [origin[1], destination[1]]
+        try:
+            nearest = ox.nearest_nodes(G_weighted, X=lons, Y=lats)
+            for i, route_id in enumerate(route_order):
+                node_lookup[route_id] = (nearest[2 * i], nearest[2 * i + 1])
+        except Exception:
+            # A single malformed coordinate can fail a batched lookup outright.
+            # Fall back to resolving one route at a time so that one bad
+            # coordinate only drops that route, not every affected route.
+            for route_id in route_order:
+                origin, destination = terminals_by_route[route_id]
+                try:
+                    node_lookup[route_id] = (
+                        ox.nearest_nodes(G_weighted, X=origin[1], Y=origin[0]),
+                        ox.nearest_nodes(
+                            G_weighted, X=destination[1], Y=destination[0]
+                        ),
+                    )
+                except Exception:
+                    pass  # this route is skipped below, same as pre-batching behavior
+
     results = []
     for route_id in affected_route_ids:
+        if route_id not in node_lookup:
+            continue
+        orig_node, dest_node = node_lookup[route_id]
         result = find_alternative_route(
-            route_id, G_weighted, trips, stop_times, stops_df, flood_prob_map
+            route_id,
+            G_weighted,
+            trips,
+            stop_times,
+            stops_df,
+            flood_prob_map,
+            orig_node=orig_node,
+            dest_node=dest_node,
+            terminals=terminals_by_route[route_id],
         )
         if result:
             results.append(result)

@@ -3,7 +3,6 @@ import geopandas as gpd
 
 METRIC = "EPSG:32737"
 LOW_ELEV = 1_620.0
-
 FEATS = [
     "mean_elevation",
     "min_elevation",
@@ -53,6 +52,10 @@ FEATS = [
     "ward_hist_rate",
     "max_elevation",
 ]
+
+
+def minmax(s):
+    return (s - s.min()) / (s.max() - s.min() + 1e-9)
 
 
 def engineer_features(df: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
@@ -118,9 +121,6 @@ def engineer_features(df: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     df["month"] = month
 
     # --- Interaction features ---
-    def minmax(s):
-        return (s - s.min()) / (s.max() - s.min() + 1e-9)
-
     elev_pen = np.log1p((df["mean_elevation"] - LOW_ELEV).clip(lower=0)) + 1
     df["route_vuln"] = (df["route_density"] * (1 + df["is_terminal"])) / elev_pen
     df["route_vuln_n"] = minmax(df["route_vuln"])

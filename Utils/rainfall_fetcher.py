@@ -53,16 +53,15 @@ def _asof_date(horizon_hours: int) -> datetime.date:
 
 def _compute_features(
     daily_mm: list[float],
-    daily_dates: list[str] | None = None,
+    daily_dates: list[Any] | None = None,
     horizon_hours: int = 0,
 ) -> dict[str, float]:
+    """`daily_dates`, if given, must already be `date` objects (see
+    _compute_horizon_features, which parses the ISO strings once up front
+    instead of re-parsing them for every horizon)."""
     if daily_dates:
         asof = _asof_date(horizon_hours)
-        daily_mm = [
-            mm
-            for day, mm in zip(daily_dates, daily_mm)
-            if datetime.fromisoformat(day).date() <= asof
-        ]
+        daily_mm = [mm for day, mm in zip(daily_dates, daily_mm) if day <= asof]
 
     arr = np.array(daily_mm, dtype=float)
     arr = np.nan_to_num(arr, nan=0.0)
@@ -83,8 +82,11 @@ def _compute_horizon_features(
     daily_dates: list[str] | None = None,
     horizons_hours: tuple[int, ...] = FORECAST_HORIZONS_HOURS,
 ) -> dict[str, dict[str, float]]:
+    parsed_dates = (
+        [datetime.fromisoformat(d).date() for d in daily_dates] if daily_dates else None
+    )
     return {
-        str(horizon): _compute_features(daily_mm, daily_dates, horizon)
+        str(horizon): _compute_features(daily_mm, parsed_dates, horizon)
         for horizon in horizons_hours
     }
 
