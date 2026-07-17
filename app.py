@@ -361,6 +361,11 @@ def load_rerouting():
     return pd.read_csv(REROUTING_CSV)
 
 
+@st.cache_data
+def load_model_comparison(path):
+    return pd.read_csv(path)
+
+
 @st.cache_resource
 def get_groq_client():
     return Groq(api_key=st.secrets["GROQ_API_KEY"])
@@ -693,7 +698,7 @@ with st.sidebar:
             # ── Recipient input ──────────────────────────────────────────────
             sms_input_mode = st.radio(
                 "Recipients",
-                ["Enter numbers manually", "Auto — all critical wards"],
+                ["Enter numbers manually", "Auto (all critical wards)"],
                 label_visibility="visible",
                 horizontal=True,
             )
@@ -753,7 +758,7 @@ with st.sidebar:
                 .tolist()
             )
             default_msg = (
-                f"FLOOD ALERT — Nairobi Flood Guard\n"
+                f"FLOOD ALERT: Nairobi Flood Guard\n"
                 f"High-risk wards: {', '.join(top_wards) if top_wards else 'None at current threshold'}.\n"
                 f"Threshold: {threshold:.0%}. Avoid low-lying areas & flooded routes.\n"
                 f"Details: https://nairobi-flood-guard.streamlit.app"
@@ -838,7 +843,7 @@ with st.sidebar:
                 st.markdown("**Send log (this session)**")
                 for entry in reversed(st.session_state.sms_log[-5:]):
                     st.caption(
-                        f"✉ {entry['sent']} sent · {entry['failed']} failed — "
+                        f"✉ {entry['sent']} sent · {entry['failed']} failed: "
                         f"\"{entry['message']}\""
                     )
 
@@ -866,7 +871,7 @@ if page == "Flood Risk Dashboard":
             "Live mode" if use_live else f"{forecast_horizon_hours}hr prediction mode"
         )
         st.info(
-            f"**{mode_label}** — predictions use rainfall features from "
+            f"**{mode_label}**: predictions use rainfall features from "
             f"{rainfall_summary(rainfall_meta)}. "
             "Terrain features remain static (SRTM). "
             "Switch rainfall source in the sidebar to compare live, historical, "
@@ -1243,7 +1248,7 @@ elif page == "Route Optimization":
             )
         else:
             st.info(
-                f"**{mode_label.capitalize()} routing** — recompute the "
+                f"**{mode_label.capitalize()} routing**: recompute the "
                 "flood-weighted road network and rerun Dijkstra using the "
                 f"{mode_label} Nairobi flood risk selected in the sidebar. "
                 "This takes a few seconds (it's not run automatically on "
@@ -1319,7 +1324,7 @@ elif page == "Route Optimization":
 
     if rerouting_df.empty:
         st.success(
-            "✅ No routes currently need rerouting — flood risk is below the "
+            "✅ No routes currently need rerouting. Flood risk is below the "
             f"{threshold:.2f} threshold across all monitored wards."
         )
         st.stop()
@@ -1669,99 +1674,6 @@ elif page == "AI Assistant":
         unsafe_allow_html=True,
     )
 
-    # Build rich context
-    wards_context = (
-        df[df["county"].str.lower().str.strip() == "nairobi"][
-            [
-                "ward",
-                "subcounty",
-                "county",
-                "flood_prob",
-                "risk_label",
-                "elevation_mean_m",
-                "elevation_min_m",
-                "elevation_max_m",
-                "slope_mean_deg",
-                "rain_cumulative_mm",
-                "rain_max_daily_mm",
-                "rain_preflood_7d_mm",
-                "pop2009",
-            ]
-        ]
-        .sort_values("flood_prob", ascending=False)
-        .head(100)
-        .assign(flood_prob=lambda x: x["flood_prob"].map("{:.1%}".format))
-        .to_string(index=False)
-    )
-
-    model_perf_context = ""
-    model_csv = DATA / "model_comparison.csv"
-    if model_csv.exists():
-        model_perf_context = "\nModel Performance Comparison:\n" + pd.read_csv(
-            model_csv
-        ).to_string(index=False)
-
-    rerouting_context = ""
-    if REROUTING_CSV.exists():
-        r = load_rerouting()
-        rerouting_context = (
-            f"\nFull Rerouting Summary ({len(r)} affected routes):\n"
-            + r.to_string(index=False)
-            + "\n\nAggregate stats:"
-            + f"\n  Average risk reduction : {r['risk_reduction'].mean():.3f}"
-            + f"\n  Average extra time (min): {r['extra_time_min'].mean():.1f}"
-            + f"\n  Routes with risk > 0   : {(r['risk_reduction'] > 0).sum()}"
-        )
-
-    system_prompt = (
-        "You are Mlinzi, an AI assistant for Nairobi Flood Guard - a data science project\n"
-        "that predicts flood susceptibility across Kenya's 1,450 administrative wards and\n"
-        "recommends alternative matatu routes during flood events. Your name means\n"
-        "'guardian' or 'protector' in Swahili, which reflects your purpose.\n\n"
-        "--- PROJECT OVERVIEW ---\n"
-        "The prediction model is XGBoost trained on the following features:\n"
-        "  Terrain  : elevation (mean, min, max, range in metres), slope (degrees)\n"
-        "  Rainfall : cumulative 90-day (mm), max single-day (mm), recent 7-day (mm)\n"
-        "  Population: 2009 Kenya census ward population\n\n"
-        f"--- ACTIVE RAINFALL SOURCE ---\n"
-        f"{rainfall_summary(rainfall_meta) if use_open_meteo else 'Historical CHIRPS data from the April 2024 flood event.'}\n\n"
-        "Key insight: flooding in Kenya is primarily terrain-driven at ward scale.\n"
-        "Low-lying wards flood not because they receive more rain but because water drains\n"
-        "into them from surrounding higher ground. Elevation features dominate predictions;\n"
-        "rainfall adds marginal predictive value at this spatial resolution.\n\n"
-        "--- CURRENT RISK SUMMARY ---\n"
-        f"Total wards         : {len(df)}\n"
-        f"High-risk (>= {threshold:.0%}) : {int(n_total)}\n"
-        f"Critical risk (>= 70%): {int(n_critical)}\n\n"
-        "Risk thresholds:\n"
-        "  Low      : flood probability < 20%\n"
-        "  Moderate : 20% - 45%\n"
-        "  High     : 45% - 70%\n"
-        "  Critical : >= 70%\n\n"
-        "--- ALL NAIROBI DATA (top 100 by flood probability) ---\n"
-        f"{wards_context}\n\n"
-        "--- MODEL PERFORMANCE ---\n"
-        f"{model_perf_context if model_perf_context else 'Model comparison data not available.'}\n\n"
-        "--- ROUTE OPTIMIZATION ---\n"
-        "The route optimization system:\n"
-        "  - Uses XGBoost flood probabilities to identify high-risk road segments\n"
-        "  - Assigns flood cost = travel_time x (1 + alpha x flood_probability), "
-        "alpha = 10\n"
-        "    (effectively blocking all flood-affected roads outright)\n"
-        "  - Runs weighted Dijkstra to find the safest alternative path\n"
-        "  - Outputs a GTFS-RT feed consumable by transit apps\n\n"
-        f"{rerouting_context if rerouting_context else 'Rerouting data not available.'}\n\n"
-        "--- INSTRUCTIONS ---\n"
-        "- Be concise, factual, and actionable.\n"
-        "- When asked about a specific ward, look it up in the ward data above and quote\n"
-        "  its exact flood probability, risk level, and key terrain/rainfall figures.\n"
-        "- When asked about routes, reference the rerouting summary above by route ID.\n"
-        "- If asked which wards are most at risk, list the top entries from the ward data.\n"
-        "- If asked about the model, explain the XGBoost pipeline and feature importance.\n"
-        "- Do not make up data - all ward and route figures are provided above.\n"
-        "- Respond in English unless the user writes in another language.\n"
-    )
-
     # Process new input
     if submitted and user_input.strip():
         if "messages" not in st.session_state:
@@ -1770,6 +1682,103 @@ elif page == "AI Assistant":
             {"role": "user", "content": user_input.strip()}
         )
         with st.spinner("Mlinzi is thinking..."):
+            # Context is built here, only when a message is actually being
+            # sent to the LLM, rather than on every rerun of this page
+            # (typing, clicking elsewhere, clearing the conversation, etc.
+            # all trigger a rerun and previously rebuilt this unconditionally).
+            wards_context = (
+                df[df["county"].str.lower().str.strip() == "nairobi"][
+                    [
+                        "ward",
+                        "subcounty",
+                        "county",
+                        "flood_prob",
+                        "risk_label",
+                        "elevation_mean_m",
+                        "elevation_min_m",
+                        "elevation_max_m",
+                        "slope_mean_deg",
+                        "rain_cumulative_mm",
+                        "rain_max_daily_mm",
+                        "rain_preflood_7d_mm",
+                        "pop2009",
+                    ]
+                ]
+                .sort_values("flood_prob", ascending=False)
+                .head(100)
+                .assign(flood_prob=lambda x: x["flood_prob"].map("{:.1%}".format))
+                .to_string(index=False)
+            )
+
+            model_perf_context = ""
+            model_csv = DATA / "model_comparison.csv"
+            if model_csv.exists():
+                model_perf_context = (
+                    "\nModel Performance Comparison:\n"
+                    + load_model_comparison(model_csv).to_string(index=False)
+                )
+
+            rerouting_context = ""
+            if REROUTING_CSV.exists():
+                r = load_rerouting()
+                rerouting_context = (
+                    f"\nFull Rerouting Summary ({len(r)} affected routes):\n"
+                    + r.to_string(index=False)
+                    + "\n\nAggregate stats:"
+                    + f"\n  Average risk reduction : {r['risk_reduction'].mean():.3f}"
+                    + f"\n  Average extra time (min): {r['extra_time_min'].mean():.1f}"
+                    + f"\n  Routes with risk > 0   : {(r['risk_reduction'] > 0).sum()}"
+                )
+
+            system_prompt = (
+                "You are Mlinzi, an AI assistant for Nairobi Flood Guard - a data science project\n"
+                "that predicts flood susceptibility across Kenya's 1,450 administrative wards and\n"
+                "recommends alternative matatu routes during flood events. Your name means\n"
+                "'guardian' or 'protector' in Swahili, which reflects your purpose.\n\n"
+                "--- PROJECT OVERVIEW ---\n"
+                "The prediction model is XGBoost trained on the following features:\n"
+                "  Terrain  : elevation (mean, min, max, range in metres), slope (degrees)\n"
+                "  Rainfall : cumulative 90-day (mm), max single-day (mm), recent 7-day (mm)\n"
+                "  Population: 2009 Kenya census ward population\n\n"
+                f"--- ACTIVE RAINFALL SOURCE ---\n"
+                f"{rainfall_summary(rainfall_meta) if use_open_meteo else 'Historical CHIRPS data from the April 2024 flood event.'}\n\n"
+                "Key insight: flooding in Kenya is primarily terrain-driven at ward scale.\n"
+                "Low-lying wards flood not because they receive more rain but because water drains\n"
+                "into them from surrounding higher ground. Elevation features dominate predictions;\n"
+                "rainfall adds marginal predictive value at this spatial resolution.\n\n"
+                "--- CURRENT RISK SUMMARY ---\n"
+                f"Total wards         : {len(df)}\n"
+                f"High-risk (>= {threshold:.0%}) : {int(n_total)}\n"
+                f"Critical risk (>= 70%): {int(n_critical)}\n\n"
+                "Risk thresholds:\n"
+                "  Low      : flood probability < 20%\n"
+                "  Moderate : 20% - 45%\n"
+                "  High     : 45% - 70%\n"
+                "  Critical : >= 70%\n\n"
+                "--- ALL NAIROBI DATA (top 100 by flood probability) ---\n"
+                f"{wards_context}\n\n"
+                "--- MODEL PERFORMANCE ---\n"
+                f"{model_perf_context if model_perf_context else 'Model comparison data not available.'}\n\n"
+                "--- ROUTE OPTIMIZATION ---\n"
+                "The route optimization system:\n"
+                "  - Uses XGBoost flood probabilities to identify high-risk road segments\n"
+                "  - Assigns flood cost = travel_time x (1 + alpha x flood_probability), "
+                "alpha = 10\n"
+                "    (effectively blocking all flood-affected roads outright)\n"
+                "  - Runs weighted Dijkstra to find the safest alternative path\n"
+                "  - Outputs a GTFS-RT feed consumable by transit apps\n\n"
+                f"{rerouting_context if rerouting_context else 'Rerouting data not available.'}\n\n"
+                "--- INSTRUCTIONS ---\n"
+                "- Be concise, factual, and actionable.\n"
+                "- When asked about a specific ward, look it up in the ward data above and quote\n"
+                "  its exact flood probability, risk level, and key terrain/rainfall figures.\n"
+                "- When asked about routes, reference the rerouting summary above by route ID.\n"
+                "- If asked which wards are most at risk, list the top entries from the ward data.\n"
+                "- If asked about the model, explain the XGBoost pipeline and feature importance.\n"
+                "- Do not make up data - all ward and route figures are provided above.\n"
+                "- Respond in English unless the user writes in another language.\n"
+            )
+
             client = get_groq_client()
             response = client.chat.completions.create(
                 model=GROQ_MODEL,
@@ -1810,7 +1819,7 @@ elif page == "Model Performance":
         "risk map and the route optimization system."
     )
 
-    metrics_df = pd.read_csv(DATA / "model_comparison.csv")
+    metrics_df = load_model_comparison(DATA / "model_comparison.csv")
     styled = (
         metrics_df.set_index("Model")
         .style.apply(highlight_best, axis=0)
