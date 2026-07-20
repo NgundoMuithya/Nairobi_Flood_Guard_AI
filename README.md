@@ -6,7 +6,7 @@
 NAIROBI FLOOD GUARD
 </h1>
 
-> **Authors**: Group 4
+> **Authors**: The Unscripted Engineers
 
 ---
 
