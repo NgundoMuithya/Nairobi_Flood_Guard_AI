@@ -561,7 +561,7 @@ model = load_model()
 st.markdown(
     """
 <div class="header-banner">
-    <div class="header-title">🌊 Nairobi Flood Guard</div>
+    <div class="header-title">Nairobi Flood Guard</div>
     <div class="header-subtitle">Early Flood Warning &amp; Route Optimization System - Kenya</div>
 </div>
 """,
@@ -1255,15 +1255,15 @@ elif page == "Route Optimization":
                 "road network nodes for every affected route)."
             )
             alpha = st.slider(
-                "α (flood-cost multiplier)",
+                "alpha (flood-cost multiplier)",
                 min_value=1.0,
                 max_value=50.0,
                 value=10.0,
                 step=1.0,
-                help="Higher α makes the algorithm avoid flooded roads more "
+                help="Higher alpha makes the algorithm avoid flooded roads more "
                 "aggressively, at the cost of longer detours.",
             )
-            if st.button(f"🔄 Recompute {mode_label} routes", use_container_width=True):
+            if st.button(f"Recompute {mode_label} routes", use_container_width=True):
                 st.session_state["force_live_routes"] = True
             st.session_state.setdefault("live_routes_alpha", alpha)
 
@@ -1311,7 +1311,7 @@ elif page == "Route Optimization":
     if routing_source == "live":
         st.success(
             f"Showing **{routing_meta.get('mode_label', mode_label)}** rerouting "
-            f"(α={routing_meta['alpha']:.0f}, threshold={routing_meta['threshold']:.2f}) · "
+            f"(alpha={routing_meta['alpha']:.0f}, threshold={routing_meta['threshold']:.2f}) · "
             f"{routing_meta['rerouted_routes']} of "
             f"{routing_meta['total_affected_routes']} affected routes rerouted."
         )
@@ -1323,7 +1323,7 @@ elif page == "Route Optimization":
 
     if rerouting_df.empty:
         st.success(
-            "✅ No routes currently need rerouting. Flood risk is below the "
+            "No routes currently need rerouting. Flood risk is below the "
             f"{threshold:.2f} threshold across all monitored wards."
         )
         st.stop()
@@ -1433,7 +1433,7 @@ elif page == "Route Optimization":
     )
     map_view = st.radio(
         "View",
-        ["🗺 Flood Risk Map", "🚌 Route Explorer"],
+        ["Flood Risk Map", "Route Explorer"],
         horizontal=True,
         label_visibility="collapsed",
     )
