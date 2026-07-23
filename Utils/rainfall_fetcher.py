@@ -121,6 +121,7 @@ def _fetch_batch(
     methods = ("GET", "POST")
 
     for attempt in range(MAX_RETRIES):
+        already_waited = False
         for method in methods:
             try:
                 if method == "GET":
@@ -145,6 +146,7 @@ def _fetch_batch(
                     )
                     last_detail = f"{method} HTTP 429 rate limited"
                     time.sleep(wait)
+                    already_waited = True
                     break
 
                 if resp.status_code == 414 and method == "GET":
@@ -168,7 +170,7 @@ def _fetch_batch(
                 last_detail = f"{method} {exc.__class__.__name__}: {exc}"
                 continue
 
-        if attempt < MAX_RETRIES - 1:
+        if not already_waited and attempt < MAX_RETRIES - 1:
             time.sleep(min(10, 2 * (2**attempt)))
 
     raise RuntimeError(
@@ -257,6 +259,12 @@ def fetch_grid_rainfall(
         responses = _fetch_batch(
             lats, lons, past_days=past_days, forecast_days=forecast_days
         )
+        if len(responses) != len(batch):
+            raise RuntimeError(
+                f"Open-Meteo returned {len(responses)} results for a "
+                f"{len(batch)}-point batch; refusing to silently zip "
+                "mismatched results onto the wrong grid points."
+            )
 
         for point, payload in zip(batch, responses):
             daily = payload.get("daily", {})
@@ -337,9 +345,11 @@ def _parse_cached_grid(
 def _cache_has_horizon(cached: dict[str, Any] | None, horizon_hours: int) -> bool:
     if cached is None:
         return False
+    if not cached.get("grid_features"):
+        return False
     if horizon_hours == 0:
         return True
-    first_features = next(iter(cached.get("grid_features", {}).values()), {})
+    first_features = next(iter(cached["grid_features"].values()), {})
     return str(horizon_hours) in first_features
 
 
@@ -406,6 +416,7 @@ def apply_live_rainfall(
         ):
             grid_features = _parse_cached_grid(cached)
             meta["fetched_at"] = cached["fetched_at"]
+            meta["source"] = cached.get("source", meta["source"])
             meta["from_cache"] = True
 
     if not grid_features:
@@ -429,6 +440,7 @@ def apply_live_rainfall(
                     if stale is not None and _cache_has_horizon(stale, horizon_hours):
                         grid_features = _parse_cached_grid(stale)
                         meta["fetched_at"] = stale["fetched_at"]
+                        meta["source"] = stale.get("source", meta["source"])
                         meta["from_cache"] = True
                         meta["stale_cache"] = True
                     else:
@@ -441,6 +453,7 @@ def apply_live_rainfall(
                 if stale is not None and _cache_has_horizon(stale, horizon_hours):
                     grid_features = _parse_cached_grid(stale)
                     meta["fetched_at"] = stale["fetched_at"]
+                    meta["source"] = stale.get("source", meta["source"])
                     meta["from_cache"] = True
                     meta["stale_cache"] = True
                 else:
@@ -457,6 +470,7 @@ def apply_forecast_rainfall(
     use_cache: bool = True,
     max_cache_age_hours: float = 6.0,
     on_progress: Any | None = None,
+    visualcrossing_api_key: str | None = None,
 ) -> tuple[gpd.GeoDataFrame, dict[str, Any]]:
     """Replace rainfall columns with Open-Meteo features as-of a forecast horizon."""
     if horizon_hours not in FORECAST_HORIZONS_HOURS:
@@ -471,6 +485,7 @@ def apply_forecast_rainfall(
         max_cache_age_hours=max_cache_age_hours,
         horizon_hours=horizon_hours,
         on_progress=on_progress,
+        visualcrossing_api_key=visualcrossing_api_key,
     )
 
 
