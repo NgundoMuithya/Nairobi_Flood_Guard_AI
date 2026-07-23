@@ -84,101 +84,212 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# -- Custom CSS ---------------------------------------------------------------
+# -- Custom CSS -----------------------------------------------------------
+# Design tokens - Highland Terrain system
+#   Ground     #07110D   panel      #0E2318   panel-raised #12301F
+#   Line       #1F4A32   line-soft  #17321F   text         #E8DFC8
+#   Text-dim   #8FA894   accent     #D4A24C  (ochre - the working accent)
+#   Safe       #3FA66B   moderate   #D4A24C   high  #C4622D   critical #8B2E2E
+# Display: Fraunces (surveyed/geological serif) - restrained, headers only
+# Data:    Space Mono (coordinates, figures, labels)
 st.markdown(
     """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Space+Mono:wght@400;700&display=swap');
 
-html, body, [class*="css"] { font-family: 'DM Mono', monospace; }
-h1, h2, h3, h4 { font-family: 'Syne', sans-serif !important; letter-spacing: -0.02em; }
+:root {
+    --ground: #07110D; --panel: #0E2318; --panel-raised: #12301F;
+    --line: #1F4A32; --line-soft: #17321F;
+    --text: #E8DFC8; --text-dim: #8FA894; --text-faint: #4E6357;
+    --accent: #D4A24C;
+    --safe: #3FA66B; --moderate: #D4A24C; --high: #C4622D; --critical: #8B2E2E;
+}
+
+html, body, [class*="css"] { font-family: 'Space Mono', monospace; color: var(--text); }
+.stApp { background: var(--ground); }
+h1, h2, h3, h4 { font-family: 'Fraunces', serif !important; letter-spacing: -0.01em; font-weight: 600; }
+
+/* Contour-line texture, reused wherever the terrain motif appears */
+.contour-field {
+    background-image:
+        repeating-radial-gradient(ellipse 140% 100% at 15% 120%,
+            transparent 0, transparent 22px, rgba(232,223,200,0.035) 23px, transparent 24px);
+}
 
 .header-banner {
-    background: linear-gradient(135deg, #0a0f1e 0%, #0d2137 50%, #0a1628 100%);
-    border-bottom: 2px solid #1a6fc4;
-    padding: 2rem 2.5rem 1.5rem;
+    background: linear-gradient(180deg, #0B1F14 0%, #07110D 100%);
+    border-bottom: 1px solid var(--line);
+    padding: 2.75rem 2.5rem 2rem;
     margin: -1rem -1rem 2rem -1rem;
     position: relative; overflow: hidden;
 }
 .header-banner::before {
-    content: ''; position: absolute; top: -50%; left: -10%;
-    width: 120%; height: 200%;
-    background: radial-gradient(ellipse at 30% 50%, rgba(26,111,196,0.15) 0%, transparent 60%),
-                radial-gradient(ellipse at 70% 30%, rgba(226,75,74,0.08) 0%, transparent 50%);
+    content: ''; position: absolute; inset: 0;
+    background-image:
+        repeating-radial-gradient(ellipse 160% 120% at 88% 140%,
+            transparent 0px, transparent 26px, rgba(212,162,76,0.05) 27px, transparent 28px),
+        repeating-radial-gradient(ellipse 160% 120% at 88% 140%,
+            transparent 0px, transparent 52px, rgba(232,223,200,0.04) 53px, transparent 54px);
     pointer-events: none;
 }
+.header-eyebrow {
+    font-family: 'Space Mono', monospace; font-size: 0.68rem; color: var(--accent);
+    letter-spacing: 0.22em; text-transform: uppercase; margin-bottom: 0.6rem;
+    display: flex; align-items: center; gap: 0.5rem;
+}
+.header-eyebrow::before {
+    content: ''; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 8px var(--accent);
+}
 .header-title {
-    font-family: 'Syne', sans-serif !important;
-    font-size: 2.4rem; font-weight: 800;
-    color: #ffffff; letter-spacing: -0.03em; margin: 0; line-height: 1.1;
+    font-family: 'Fraunces', serif !important;
+    font-size: 3rem; font-weight: 600; font-style: normal;
+    color: var(--text); letter-spacing: -0.02em; margin: 0; line-height: 1.02;
+    position: relative;
 }
 .header-subtitle {
-    font-family: 'DM Mono', monospace; font-size: 0.78rem; color: #1a6fc4;
-    margin-top: 0.4rem; letter-spacing: 0.12em; text-transform: uppercase;
+    font-family: 'Space Mono', monospace; font-size: 0.76rem; color: var(--text-dim);
+    margin-top: 0.65rem; letter-spacing: 0.08em; max-width: 640px; line-height: 1.6;
 }
 .badge {
-    display: inline-block; padding: 0.25rem 0.75rem; border-radius: 2px;
-    font-family: 'DM Mono', monospace; font-size: 0.75rem; font-weight: 500;
-    letter-spacing: 0.08em; text-transform: uppercase;
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    padding: 0.3rem 0.8rem; border-radius: 100px;
+    font-family: 'Space Mono', monospace; font-size: 0.72rem; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
 }
-.badge-low      { background: #1a3d2b; color: #4ade80; border: 1px solid #4ade80; }
-.badge-moderate { background: #3d3010; color: #fbbf24; border: 1px solid #fbbf24; }
-.badge-high     { background: #3d1a10; color: #fb923c; border: 1px solid #fb923c; }
-.badge-critical { background: #2d0d0d; color: #f87171; border: 1px solid #f87171; }
+.badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.badge-low      { background: rgba(63,166,107,0.12);  color: var(--safe);     border: 1px solid rgba(63,166,107,0.4); }
+.badge-moderate { background: rgba(212,162,76,0.12);  color: var(--moderate); border: 1px solid rgba(212,162,76,0.4); }
+.badge-high     { background: rgba(196,98,45,0.14);   color: var(--high);     border: 1px solid rgba(196,98,45,0.45); }
+.badge-critical { background: rgba(139,46,46,0.18);   color: #E8A0A0;         border: 1px solid rgba(139,46,46,0.6); }
+
 .metric-card {
-    background: #0d1117; border: 1px solid #1e2d3d;
-    border-left: 3px solid #1a6fc4; border-radius: 4px;
+    background: var(--panel); border: 1px solid var(--line-soft);
+    border-left: 2px solid var(--accent); border-radius: 3px;
     padding: 1rem 1.2rem; margin-bottom: 0.75rem;
+    transition: border-color 0.15s ease, background 0.15s ease;
 }
+.metric-card:hover { background: var(--panel-raised); border-left-color: var(--text); }
 .metric-label {
-    font-size: 0.68rem; color: #6b7c93;
-    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.25rem;
+    font-size: 0.65rem; color: var(--text-dim);
+    letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 0.3rem;
 }
 .metric-value {
-    font-family: 'Syne', sans-serif; font-size: 1.6rem;
-    font-weight: 700; color: #e2e8f0; line-height: 1;
+    font-family: 'Fraunces', serif; font-size: 1.7rem;
+    font-weight: 600; color: var(--text); line-height: 1;
 }
-.metric-unit { font-size: 0.7rem; color: #4a5568; margin-left: 0.3rem; }
+.metric-unit { font-family: 'Space Mono', monospace; font-size: 0.68rem; color: var(--text-faint); margin-left: 0.35rem; }
+
 .section-header {
-    font-family: 'Syne', sans-serif; font-size: 1.1rem; font-weight: 700;
-    color: #e2e8f0; border-bottom: 1px solid #1e2d3d;
-    padding-bottom: 0.5rem; margin-bottom: 1rem; letter-spacing: -0.01em;
+    font-family: 'Fraunces', serif; font-size: 1.35rem; font-weight: 600;
+    color: var(--text); border-bottom: 1px solid var(--line);
+    padding-bottom: 0.6rem; margin-bottom: 1.1rem; letter-spacing: -0.01em;
+    display: flex; align-items: baseline; justify-content: space-between;
 }
-section[data-testid="stSidebar"] { background: #080c14; border-right: 1px solid #1e2d3d; }
+
+section[data-testid="stSidebar"] {
+    background: #06100B; border-right: 1px solid var(--line-soft);
+}
+section[data-testid="stSidebar"] h3 {
+    font-family: 'Space Mono', monospace !important; font-size: 0.7rem !important;
+    font-weight: 700 !important; color: var(--accent) !important;
+    letter-spacing: 0.16em !important; text-transform: uppercase !important;
+    margin-bottom: 0.75rem !important;
+}
 [data-testid="stSidebarCollapseButton"] { display: none !important; }
 .material-symbols-rounded, [data-testid="stIconMaterial"] {
     font-family: 'Material Symbols Rounded' !important;
 }
+
 .ward-panel {
-    background: #0a0f1e; border: 1px solid #1e2d3d;
-    border-radius: 4px; padding: 1.25rem; margin-top: 1rem;
+    background: linear-gradient(160deg, var(--panel) 0%, var(--ground) 130%);
+    border: 1px solid var(--line); border-radius: 4px;
+    padding: 1.5rem 1.6rem; margin-top: 1rem; position: relative; overflow: hidden;
+}
+.ward-panel::after {
+    content: ''; position: absolute; inset: 0;
+    background-image: repeating-radial-gradient(ellipse 150% 130% at 105% 130%,
+        transparent 0, transparent 20px, rgba(212,162,76,0.045) 21px, transparent 22px);
+    pointer-events: none;
 }
 .ward-name {
-    font-family: 'Syne', sans-serif; font-size: 1.3rem;
-    font-weight: 700; color: #ffffff; margin-bottom: 0.2rem;
+    font-family: 'Fraunces', serif; font-size: 1.6rem;
+    font-weight: 600; color: var(--text); margin-bottom: 0.25rem; position: relative;
 }
-.ward-meta { font-size: 0.72rem; color: #4a6080; letter-spacing: 0.05em; }
-.stSelectbox label, .stSlider label, .stTextInput label {
-    font-family: 'DM Mono', monospace !important; font-size: 0.78rem !important;
-    color: #6b7c93 !important; letter-spacing: 0.08em !important;
+.ward-meta {
+    font-family: 'Space Mono', monospace; font-size: 0.7rem; color: var(--text-dim);
+    letter-spacing: 0.06em; position: relative;
+}
+
+.stSelectbox label, .stSlider label, .stTextInput label, .stTextArea label, .stRadio label {
+    font-family: 'Space Mono', monospace !important; font-size: 0.72rem !important;
+    color: var(--text-dim) !important; letter-spacing: 0.1em !important;
     text-transform: uppercase !important;
 }
 div[data-testid="stMetric"] {
-    background: #0d1117; border: 1px solid #1e2d3d;
-    border-radius: 4px; padding: 0.75rem 1rem;
+    background: var(--panel); border: 1px solid var(--line-soft);
+    border-radius: 3px; padding: 0.75rem 1rem;
 }
+div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+    font-family: 'Fraunces', serif; color: var(--text);
+}
+div[data-testid="stMetric"] [data-testid="stMetricLabel"] {
+    font-family: 'Space Mono', monospace; font-size: 0.68rem;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim);
+}
+
 .route-stat-card {
-    background: #0d1117; border: 1px solid #1e2d3d;
-    border-radius: 4px; padding: 1rem 1.2rem; text-align: center;
+    background: var(--panel); border: 1px solid var(--line-soft);
+    border-radius: 3px; padding: 1.1rem 1.2rem; text-align: center;
+    border-top: 2px solid var(--line);
 }
 .route-stat-label {
-    font-size: 0.65rem; color: #6b7c93;
-    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.3rem;
+    font-size: 0.63rem; color: var(--text-dim);
+    letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 0.4rem;
 }
 .route-stat-value {
-    font-family: 'Syne', sans-serif; font-size: 1.3rem;
-    font-weight: 700; color: #e2e8f0;
+    font-family: 'Fraunces', serif; font-size: 1.5rem;
+    font-weight: 600; color: var(--text);
 }
+
+/* Buttons */
+.stButton > button, .stFormSubmitButton > button {
+    background: var(--panel-raised) !important; color: var(--text) !important;
+    border: 1px solid var(--line) !important; border-radius: 3px !important;
+    font-family: 'Space Mono', monospace !important; font-size: 0.75rem !important;
+    letter-spacing: 0.06em !important; text-transform: uppercase !important;
+    transition: border-color 0.15s ease, background 0.15s ease !important;
+}
+.stButton > button:hover, .stFormSubmitButton > button:hover {
+    border-color: var(--accent) !important; background: #16351F !important; color: var(--accent) !important;
+}
+
+/* Inputs, sliders, selects */
+.stSelectbox [data-baseweb="select"] > div, .stTextInput input, .stTextArea textarea {
+    background: var(--panel) !important; border-color: var(--line-soft) !important;
+    color: var(--text) !important; font-family: 'Space Mono', monospace !important;
+}
+.stSlider [data-baseweb="slider"] div[role="slider"] { background: var(--accent) !important; }
+div[data-baseweb="slider"] > div > div { background: var(--line) !important; }
+div[data-baseweb="slider"] > div > div > div { background: var(--accent) !important; }
+
+/* Expanders */
+.streamlit-expanderHeader, div[data-testid="stExpander"] summary {
+    background: var(--panel) !important; border: 1px solid var(--line-soft) !important;
+    font-family: 'Space Mono', monospace !important; color: var(--text) !important;
+}
+
+/* Dataframe */
+div[data-testid="stDataFrame"] { border: 1px solid var(--line-soft); border-radius: 3px; }
+
+/* Map frame - the basemap tiles run cooler than the rest of the UI;
+   a deliberate border makes that a frame rather than a seam. */
+iframe[title="streamlit_folium.st_folium"] {
+    border: 1px solid var(--line) !important;
+    border-radius: 4px !important;
+}
+
+hr { border-top: 1px solid var(--line-soft) !important; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -213,12 +324,12 @@ def risk_label(prob: float) -> tuple[str, str]:
 
 def risk_color(prob: float) -> str:
     if prob >= 0.70:
-        return "#f87171"
+        return "#8B2E2E"
     if prob >= 0.45:
-        return "#fb923c"
+        return "#C4622D"
     if prob >= 0.20:
-        return "#fbbf24"
-    return "#4ade80"
+        return "#D4A24C"
+    return "#3FA66B"
 
 
 def delta_color(delta: float) -> str:
@@ -226,14 +337,14 @@ def delta_color(delta: float) -> str:
     than a continuous scale, since a handful of pp of real movement should
     read clearly rather than blur into a gradient."""
     if delta >= 0.03:
-        return "#f87171"  # risk rose meaningfully
+        return "#C4622D"  # risk rose meaningfully
     if delta >= 0.01:
-        return "#fca5a5"  # risk rose slightly
+        return "#D4A24C"  # risk rose slightly
     if delta <= -0.03:
-        return "#60a5fa"  # risk fell meaningfully
+        return "#2E7D9E"  # risk fell meaningfully
     if delta <= -0.01:
-        return "#93c5fd"  # risk fell slightly
-    return "#334155"  # negligible change
+        return "#5FA8C4"  # risk fell slightly
+    return "#1F4A32"  # negligible change
 
 
 def normalize(col: str, df: pd.DataFrame) -> pd.Series:
@@ -246,7 +357,7 @@ def highlight_best(s: pd.Series) -> list[str]:
     """Highlight the highest value in each column of the metrics table."""
     is_best = s == s.max()
     return [
-        "background-color: #0d2137; color: #4ade80; font-weight:600" if v else ""
+        "background-color: #12301F; color: #3FA66B; font-weight:600" if v else ""
         for v in is_best
     ]
 
@@ -257,12 +368,12 @@ def render_message(role: str, content: str) -> None:
     Content is base64-encoded to avoid all quote/backtick escaping issues.
     """
     b64 = base64.b64encode(content.encode("utf-8")).decode("utf-8")
-    icon_color = "#4a6080"
-    icon_hover = "#1a6fc4"
+    icon_color = "#8FA894"
+    icon_hover = "#D4A24C"
     align = "flex-end" if role == "user" else "flex-start"
-    bubble_bg = "#0d1a2d" if role == "user" else "#0d1117"
-    border_col = "#1a6fc4" if role == "user" else "#1e2d3d"
-    avatar = "👤" if role == "user" else "🤖"
+    bubble_bg = "#12301F" if role == "user" else "#0E2318"
+    border_col = "#D4A24C" if role == "user" else "#1F4A32"
+    avatar = "👤" if role == "user" else "🌦️"
     btn_side = "left" if role == "user" else "right"
 
     html = f"""
@@ -274,8 +385,8 @@ def render_message(role: str, content: str) -> None:
     <div class="msg-wrapper" style="position:relative; max-width:85%;">
       <div style="background:{bubble_bg}; border:1px solid {border_col};
                   border-radius:6px; padding:0.75rem 1rem;
-                  font-family:'DM Mono',monospace; font-size:0.85rem;
-                  color:#e2e8f0; line-height:1.6; white-space:pre-wrap;
+                  font-family:'Space Mono',monospace; font-size:0.85rem;
+                  color:#E8DFC8; line-height:1.6; white-space:pre-wrap;
                   word-break:break-word;">{content}</div>
       <button
         data-content="{b64}"
@@ -561,8 +672,11 @@ model = load_model()
 st.markdown(
     """
 <div class="header-banner">
+    <div class="header-eyebrow">Kenya &middot; 1,450 wards monitored</div>
     <div class="header-title">Nairobi Flood Guard</div>
-    <div class="header-subtitle">Early Flood Warning &amp; Route Optimization System - Kenya</div>
+    <div class="header-subtitle">Water follows elevation, not rainfall alone. This model reads
+    the terrain each ward sits in &mdash; and where the surrounding highland will send the
+    water next &mdash; to flag risk before it arrives, and to route matatus around it.</div>
 </div>
 """,
     unsafe_allow_html=True,
@@ -853,7 +967,7 @@ with st.sidebar:
         else "Rainfall: CHIRPS Feb-Apr 2024"
     )
     st.markdown(
-        f"<span style='font-size:0.65rem;color:#4a5568;'>Model: XGBoost · "
+        f"<span style='font-size:0.65rem;color:#4E6357;'>Model: XGBoost · "
         f"Labels: UNOSAT Apr 2024 · Terrain: SRTM 90m · "
         f"{rainfall_label}</span>",
         unsafe_allow_html=True,
@@ -906,25 +1020,25 @@ if page == "Flood Risk Dashboard":
         map_df,
         x="flood_prob",
         nbins=40,
-        color_discrete_sequence=["#1a6fc4"],
+        color_discrete_sequence=["#3FA66B"],
         labels={"flood_prob": "Flood Probability", "count": "Number of Wards"},
     )
     fig.add_vline(
         x=threshold,
         line_dash="dash",
-        line_color="#f87171",
+        line_color="#C4622D",
         annotation_text=f"Threshold ({threshold:.2f})",
-        annotation_font_color="#f87171",
+        annotation_font_color="#C4622D",
         annotation_position="top right",
     )
     fig.update_layout(
-        paper_bgcolor="#0a0f1e",
-        plot_bgcolor="#0d1117",
-        font_color="#e2e8f0",
-        font_family="DM Mono",
+        paper_bgcolor="#07110D",
+        plot_bgcolor="#0E2318",
+        font_color="#E8DFC8",
+        font_family="Space Mono",
         margin=dict(t=20, b=20, l=20, r=20),
-        xaxis=dict(gridcolor="#1e2d3d", tickformat=".0%"),
-        yaxis=dict(gridcolor="#1e2d3d"),
+        xaxis=dict(gridcolor="#1F4A32", tickformat=".0%"),
+        yaxis=dict(gridcolor="#1F4A32"),
         bargap=0.05,
     )
     st.plotly_chart(fig, width="stretch")
@@ -977,12 +1091,12 @@ elif page == "Ward Lookup":
     <div class="ward-panel">
         <div class="ward-name">{selected_ward}</div>
         <div class="ward-meta">{ward_row['subcounty']} &nbsp;·&nbsp; {ward_row['county']}</div>
-        <div style="margin-top:1rem">
+        <div style="margin-top:1rem; position:relative;">
             <span class="badge {badge_class}">{label} Risk</span>
             &nbsp;
-            <span style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:700;
+            <span style="font-family:'Fraunces',serif;font-size:1.5rem;font-weight:600;
                          color:{risk_color(prob)}">{prob:.1%}</span>
-            <span style="font-size:0.7rem;color:#4a6080;margin-left:0.3rem">flood probability</span>
+            <span style="font-size:0.7rem;color:#8FA894;margin-left:0.3rem">flood probability</span>
         </div>
     </div>
     """,
@@ -1046,8 +1160,8 @@ elif page == "Ward Lookup":
             theta=radar_labels + [radar_labels[0]],
             fill="toself",
             name=selected_ward,
-            line_color="#1a6fc4",
-            fillcolor="rgba(26,111,196,0.2)",
+            line_color="#D4A24C",
+            fillcolor="rgba(212,162,76,0.2)",
         )
     )
     fig.add_trace(
@@ -1056,20 +1170,20 @@ elif page == "Ward Lookup":
             theta=radar_labels + [radar_labels[0]],
             fill="toself",
             name="Kenya Average",
-            line_color="#4ade80",
-            fillcolor="rgba(74,222,128,0.1)",
+            line_color="#3FA66B",
+            fillcolor="rgba(63,166,107,0.1)",
         )
     )
     fig.update_layout(
         polar=dict(
-            bgcolor="#0d1117",
-            radialaxis=dict(visible=True, gridcolor="#1e2d3d", color="#4a5568"),
-            angularaxis=dict(gridcolor="#1e2d3d", color="#6b7c93"),
+            bgcolor="#0E2318",
+            radialaxis=dict(visible=True, gridcolor="#1F4A32", color="#4E6357"),
+            angularaxis=dict(gridcolor="#1F4A32", color="#8FA894"),
         ),
-        paper_bgcolor="#0a0f1e",
-        font_color="#e2e8f0",
-        font_family="DM Mono",
-        legend=dict(bgcolor="#0a0f1e", bordercolor="#1e2d3d", borderwidth=1),
+        paper_bgcolor="#07110D",
+        font_color="#E8DFC8",
+        font_family="Space Mono",
+        legend=dict(bgcolor="#07110D", bordercolor="#1F4A32", borderwidth=1),
         margin=dict(t=30, b=30, l=30, r=30),
         height=380,
     )
@@ -1123,7 +1237,7 @@ elif page == "Ward Lookup":
                 axis=1,
             )
             shap_df["Color"] = shap_df["SHAP Value"].apply(
-                lambda v: "#f87171" if v > 0 else "#4ade80"
+                lambda v: "#C4622D" if v > 0 else "#3FA66B"
             )
 
             fig_shap = go.Figure(
@@ -1135,18 +1249,18 @@ elif page == "Ward Lookup":
                     hovertemplate="<b>%{y}</b><br>SHAP: %{x:.4f}<extra></extra>",
                 )
             )
-            fig_shap.add_vline(x=0, line_color="#4a5568", line_width=1)
+            fig_shap.add_vline(x=0, line_color="#4E6357", line_width=1)
             fig_shap.update_layout(
-                paper_bgcolor="#0a0f1e",
-                plot_bgcolor="#0d1117",
-                font_color="#e2e8f0",
-                font_family="DM Mono",
+                paper_bgcolor="#07110D",
+                plot_bgcolor="#0E2318",
+                font_color="#E8DFC8",
+                font_family="Space Mono",
                 xaxis=dict(
                     title="Impact on flood probability",
-                    gridcolor="#1e2d3d",
-                    zerolinecolor="#4a5568",
+                    gridcolor="#1F4A32",
+                    zerolinecolor="#4E6357",
                 ),
-                yaxis=dict(gridcolor="#1e2d3d"),
+                yaxis=dict(gridcolor="#1F4A32"),
                 margin=dict(t=10, b=10, l=10, r=10),
                 height=360,
                 showlegend=False,
@@ -1180,7 +1294,7 @@ elif page == "Ward Lookup":
             axis=1,
         )
         imp_df["Color"] = imp_df["Contribution"].apply(
-            lambda v: "#f87171" if v > 0 else "#4ade80"
+            lambda v: "#C4622D" if v > 0 else "#3FA66B"
         )
 
         fig_imp = go.Figure(
@@ -1192,17 +1306,17 @@ elif page == "Ward Lookup":
                 hovertemplate="<b>%{y}</b><br>Contribution: %{x:.4f}<extra></extra>",
             )
         )
-        fig_imp.add_vline(x=0, line_color="#4a5568", line_width=1)
+        fig_imp.add_vline(x=0, line_color="#4E6357", line_width=1)
         fig_imp.update_layout(
-            paper_bgcolor="#0a0f1e",
-            plot_bgcolor="#0d1117",
-            font_color="#e2e8f0",
-            font_family="DM Mono",
+            paper_bgcolor="#07110D",
+            plot_bgcolor="#0E2318",
+            font_color="#E8DFC8",
+            font_family="Space Mono",
             xaxis=dict(
                 title="Feature contribution (importance × deviation from Kenya avg)",
-                gridcolor="#1e2d3d",
+                gridcolor="#1F4A32",
             ),
-            yaxis=dict(gridcolor="#1e2d3d"),
+            yaxis=dict(gridcolor="#1F4A32"),
             margin=dict(t=10, b=10, l=10, r=10),
             height=360,
             showlegend=False,
@@ -1247,52 +1361,53 @@ elif page == "Route Optimization":
             )
         else:
             st.info(
-                f"**{mode_label.capitalize()} routing**: recompute the "
-                "flood-weighted road network and rerun Dijkstra using the "
-                f"{mode_label} Nairobi flood risk selected in the sidebar. "
-                "This takes a few seconds (it's not run automatically on "
-                "every interaction, since it reruns Dijkstra across ~87k "
-                "road network nodes for every affected route)."
+                f"**{mode_label.capitalize()} routing**: automatically "
+                "recomputed using the current Nairobi flood risk from the "
+                "sidebar. Results are cached by the underlying risk data, so "
+                "this only takes a few seconds the first time risk actually "
+                "changes; repeat visits with the same data are instant."
             )
-            alpha = st.slider(
-                "alpha (flood-cost multiplier)",
-                min_value=1.0,
-                max_value=50.0,
-                value=10.0,
-                step=1.0,
-                help="Higher alpha makes the algorithm avoid flooded roads more "
-                "aggressively, at the cost of longer detours.",
-            )
-            if st.button(f"Recompute {mode_label} routes", use_container_width=True):
-                st.session_state["force_live_routes"] = True
-            st.session_state.setdefault("live_routes_alpha", alpha)
+            alpha_col, refresh_col = st.columns([3, 1])
+            with alpha_col:
+                alpha = st.slider(
+                    "alpha (flood-cost multiplier)",
+                    min_value=1.0,
+                    max_value=50.0,
+                    value=10.0,
+                    step=1.0,
+                    help="Higher alpha makes the algorithm avoid flooded "
+                    "roads more aggressively, at the cost of longer detours.",
+                )
+            with refresh_col:
+                st.write("")
+                if st.button("Force refresh", use_container_width=True):
+                    get_live_routes.clear()
 
-            if st.session_state.get("force_live_routes"):
-                with st.spinner(
-                    "Loading road network & running flood-weighted Dijkstra..."
-                ):
-                    try:
-                        G = load_road_graph()
-                        fingerprint = flood_prob_fingerprint(
-                            nairobi, alpha, threshold, forecast_horizon_hours
-                        )
-                        rerouting_df, route_geoms, routing_meta = get_live_routes(
-                            G,
-                            nairobi,
-                            stops,
-                            stop_times,
-                            trips,
-                            alpha,
-                            threshold,
-                            fingerprint,
-                        )
-                        routing_source = "live"
-                        routing_meta["mode_label"] = mode_label
-                    except Exception as exc:
-                        st.warning(
-                            f"Recomputing {mode_label} routing failed ({exc}). "
-                            "Falling back to historical results."
-                        )
+            with st.spinner(
+                "Loading road network & running flood-weighted Dijkstra..."
+            ):
+                try:
+                    G = load_road_graph()
+                    fingerprint = flood_prob_fingerprint(
+                        nairobi, alpha, threshold, forecast_horizon_hours
+                    )
+                    rerouting_df, route_geoms, routing_meta = get_live_routes(
+                        G,
+                        nairobi,
+                        stops,
+                        stop_times,
+                        trips,
+                        alpha,
+                        threshold,
+                        fingerprint,
+                    )
+                    routing_source = "live"
+                    routing_meta["mode_label"] = mode_label
+                except Exception as exc:
+                    st.warning(
+                        f"Recomputing {mode_label} routing failed ({exc}). "
+                        "Falling back to historical results."
+                    )
 
     if routing_source == "historical":
         if not REROUTING_CSV.exists():
@@ -1404,18 +1519,18 @@ elif page == "Route Optimization":
                 "extra_time_min": "Extra Travel Time (minutes)",
                 "risk_reduction": "Flood Risk Reduction",
             },
-            color_discrete_sequence=["#1a6fc4"],
+            color_discrete_sequence=["#D4A24C"],
         )
-        fig_tradeoff.update_traces(marker=dict(size=9, opacity=0.75))
-        fig_tradeoff.add_hline(y=0, line_dash="dash", line_color="#4a5568")
-        fig_tradeoff.add_vline(x=0, line_dash="dash", line_color="#4a5568")
+        fig_tradeoff.update_traces(marker=dict(size=9, opacity=0.8))
+        fig_tradeoff.add_hline(y=0, line_dash="dash", line_color="#4E6357")
+        fig_tradeoff.add_vline(x=0, line_dash="dash", line_color="#4E6357")
         fig_tradeoff.update_layout(
-            paper_bgcolor="#0a0f1e",
-            plot_bgcolor="#0d1117",
-            font_color="#e2e8f0",
-            font_family="DM Mono",
-            xaxis=dict(gridcolor="#1e2d3d"),
-            yaxis=dict(gridcolor="#1e2d3d"),
+            paper_bgcolor="#07110D",
+            plot_bgcolor="#0E2318",
+            font_color="#E8DFC8",
+            font_family="Space Mono",
+            xaxis=dict(gridcolor="#1F4A32"),
+            yaxis=dict(gridcolor="#1F4A32"),
             margin=dict(t=20, b=20, l=20, r=20),
         )
         st.plotly_chart(fig_tradeoff, width="stretch")
@@ -1469,11 +1584,11 @@ elif page == "Route Optimization":
         with nav_centre:
             st.markdown(
                 f"<div style='text-align:center;padding:0.4rem 0;'>"
-                f"<span style='font-family:Syne,sans-serif;font-size:1rem;"
-                f"font-weight:700;color:#e2e8f0;'>Route {route_id}</span>"
-                f"<span style='font-size:0.72rem;color:#4a6080;margin-left:0.6rem;'>"
+                f"<span style='font-family:Fraunces,serif;font-size:1.05rem;"
+                f"font-weight:600;color:#E8DFC8;'>Route {route_id}</span>"
+                f"<span style='font-size:0.72rem;color:#8FA894;margin-left:0.6rem;'>"
                 f"{route_row['origin']} → {route_row['destination']}</span>"
-                f"<span style='font-size:0.65rem;color:#4a5568;margin-left:0.6rem;'>"
+                f"<span style='font-size:0.65rem;color:#4E6357;margin-left:0.6rem;'>"
                 f"({idx + 1} / {n_routes})</span></div>",
                 unsafe_allow_html=True,
             )
@@ -1483,7 +1598,7 @@ elif page == "Route Optimization":
             st.markdown(
                 f"""<div class="route-stat-card">
                 <div class="route-stat-label">Original Flood Risk</div>
-                <div class="route-stat-value" style="color:#f87171;">
+                <div class="route-stat-value" style="color:#C4622D;">
                     {route_row['original_flood_prob']:.1%}
                 </div></div>""",
                 unsafe_allow_html=True,
@@ -1492,7 +1607,7 @@ elif page == "Route Optimization":
             st.markdown(
                 f"""<div class="route-stat-card">
                 <div class="route-stat-label">Alternative Flood Risk</div>
-                <div class="route-stat-value" style="color:#4ade80;">
+                <div class="route-stat-value" style="color:#3FA66B;">
                     {route_row['alternative_flood_prob']:.1%}
                 </div></div>""",
                 unsafe_allow_html=True,
@@ -1501,7 +1616,7 @@ elif page == "Route Optimization":
             st.markdown(
                 f"""<div class="route-stat-card">
                 <div class="route-stat-label">Risk Reduction</div>
-                <div class="route-stat-value" style="color:#1a6fc4;">
+                <div class="route-stat-value" style="color:#D4A24C;">
                     {route_row['risk_reduction']:.3f}
                 </div></div>""",
                 unsafe_allow_html=True,
@@ -1510,7 +1625,7 @@ elif page == "Route Optimization":
             st.markdown(
                 f"""<div class="route-stat-card">
                 <div class="route-stat-label">Extra Travel Time</div>
-                <div class="route-stat-value" style="color:#fbbf24;">
+                <div class="route-stat-value" style="color:#5FA8C4;">
                     +{route_row['extra_time_min']:.1f} min
                 </div></div>""",
                 unsafe_allow_html=True,
@@ -1551,9 +1666,9 @@ elif page == "Route Optimization":
                     folium.CircleMarker(
                         location=[stop_row["stop_lat"], stop_row["stop_lon"]],
                         radius=5 if is_affected else 3,
-                        color="#f87171" if is_affected else "#4a5568",
+                        color="#C4622D" if is_affected else "#4E6357",
                         fill=True,
-                        fill_color="#f87171" if is_affected else "#4a5568",
+                        fill_color="#C4622D" if is_affected else "#4E6357",
                         fill_opacity=0.9,
                         tooltip=(
                             f"⚠ Affected: {stop_row.get('stop_name', stop_row['stop_id'])}"
@@ -1569,8 +1684,8 @@ elif page == "Route Optimization":
         else:
             alt_coords = route_geoms.get(str(route_id), {}).get("alternative", [])
             st.caption(
-                "🟠 Alternative route (Dijkstra, flood-weighted) · "
-                "🔵 Original route (faded reference) · "
+                "🟡 Alternative route (Dijkstra, flood-weighted) · "
+                "🟢 Original route (faded reference) · "
                 "🔴 Affected stops skipped · "
                 "risk reduced by {:.3f} · +{:.1f} min".format(
                     route_row["risk_reduction"], route_row["extra_time_min"]
@@ -1579,18 +1694,18 @@ elif page == "Route Optimization":
             if route_coords:
                 folium.PolyLine(
                     route_coords,
-                    color="#1e3a5f",
+                    color="#2E5C42",
                     weight=3,
-                    opacity=0.4,
+                    opacity=0.5,
                     tooltip=f"Route {route_id} - Original (reference)",
                     dash_array="6",
                 ).add_to(route_map)
             if alt_coords:
                 folium.PolyLine(
                     alt_coords,
-                    color="#EF9F27",
+                    color="#D4A24C",
                     weight=4,
-                    opacity=0.9,
+                    opacity=0.95,
                     dash_array="8",
                     tooltip=f"Route {route_id} - Alternative",
                 ).add_to(route_map)
@@ -1605,9 +1720,9 @@ elif page == "Route Optimization":
                     folium.CircleMarker(
                         location=[stop_row["stop_lat"], stop_row["stop_lon"]],
                         radius=5 if is_affected else 3,
-                        color="#f87171" if is_affected else "#2d3748",
+                        color="#C4622D" if is_affected else "#2E4038",
                         fill=True,
-                        fill_color="#f87171" if is_affected else "#2d3748",
+                        fill_color="#C4622D" if is_affected else "#2E4038",
                         fill_opacity=0.85,
                         tooltip=(
                             f"🚫 Skipped: {stop_row.get('stop_name', stop_row['stop_id'])}"
@@ -1626,9 +1741,9 @@ elif page == "Route Optimization":
                     location=mid,
                     icon=folium.DivIcon(
                         html=(
-                            f"<div style='background:#0d2137;border:1px solid #EF9F27;"
+                            f"<div style='background:#0E2318;border:1px solid #D4A24C;"
                             f"border-radius:4px;padding:4px 8px;font-family:monospace;"
-                            f"font-size:11px;color:#e2e8f0;white-space:nowrap;'>"
+                            f"font-size:11px;color:#E8DFC8;white-space:nowrap;'>"
                             f"Alternative · Risk ↓{route_row['risk_reduction']:.3f}"
                             f" · +{route_row['extra_time_min']:.1f} min</div>"
                         ),
@@ -1669,7 +1784,7 @@ elif page == "AI Assistant":
             submitted = st.form_submit_button("➤")
 
     st.markdown(
-        "<hr style='border:none;border-top:1px solid #1e2d3d;margin:0.5rem 0 1rem 0;'>",
+        "<hr style='border:none;border-top:1px solid #1F4A32;margin:0.5rem 0 1rem 0;'>",
         unsafe_allow_html=True,
     )
 
