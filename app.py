@@ -721,9 +721,8 @@ with st.sidebar:
     if use_open_meteo:
         if st.button("Refresh rainfall now", use_container_width=True):
             st.session_state["force_rainfall_refresh"] = True
-            st.session_state["rainfall_cache_bust"] = (
-                st.session_state.get("rainfall_cache_bust", 0) + 1
-            )
+            bust_key = f"rainfall_cache_bust_{forecast_horizon_hours}"
+            st.session_state[bust_key] = st.session_state.get(bust_key, 0) + 1
         st.caption(
             "Open-Meteo rainfall applies to Nairobi's wards only (where route "
             "optimization and alerts operate). Other counties keep the "
@@ -743,13 +742,15 @@ with st.sidebar:
 
 # -- Apply rainfall source & generate predictions -------------------------------
 force_refresh = st.session_state.pop("force_rainfall_refresh", False)
-cache_bust = st.session_state.get("rainfall_cache_bust", 0)
+cache_bust = (
+    st.session_state.get(f"rainfall_cache_bust_{forecast_horizon_hours}", 0)
+    if use_open_meteo
+    else 0
+)
 rainfall_meta: dict = {"source": "historical", "label": "CHIRPS Feb-Apr 2024"}
 
 if use_open_meteo:
     try:
-        if force_refresh:
-            get_open_meteo_ward_dataframe.clear()
         spinner_label = (
             "Loading live rainfall..."
             if forecast_horizon_hours == 0
@@ -1414,7 +1415,8 @@ elif page == "Route Optimization":
             st.info(
                 "No historical rerouting data on disk yet. "
                 + (
-                    f"Click **Recompute {mode_label} routes** above to generate results."
+                    "Live/forecast routing was attempted automatically above; "
+                    "if it also failed, check the warning shown."
                     if use_open_meteo and OSMNX_AVAILABLE
                     else "Run Route_Optimization/route_optimization.ipynb first."
                 )
