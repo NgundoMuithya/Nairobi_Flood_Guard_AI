@@ -141,21 +141,29 @@ def find_alternative_route(
             G, orig_node, dest_node, weight="flood_cost"
         )
 
-        def path_metrics(path):
-            total_time = sum(
-                G[path[i]][path[i + 1]][0].get("travel_time", 0)
-                for i in range(len(path) - 1)
-            )
-            avg_flood_prob = np.mean(
-                [
-                    flood_prob_map.get((path[i], path[i + 1], 0), 0.0)
-                    for i in range(len(path) - 1)
-                ]
-            )
-            return total_time, avg_flood_prob
+        def _best_parallel_edge(u, v, weight_key):
+            """G is a MultiDiGraph: (u, v) can have multiple parallel edges
+            (keys). nx.shortest_path picks whichever parallel edge is
+            cheapest at each hop but doesn't report which key it used, so
+            reconstruct it here rather than assuming key 0 - which silently
+            misreports metrics (or KeyErrors and drops the whole route) on
+            any node pair with more than one edge between them."""
+            edges = G[u][v]
+            best_key = min(edges, key=lambda k: edges[k].get(weight_key, 0))
+            return best_key, edges[best_key]
 
-        orig_time, orig_flood = path_metrics(original_path)
-        alt_time, alt_flood = path_metrics(alternative_path)
+        def path_metrics(path, weight_key):
+            total_time = 0.0
+            probs = []
+            for i in range(len(path) - 1):
+                u, v = path[i], path[i + 1]
+                key, edge_data = _best_parallel_edge(u, v, weight_key)
+                total_time += edge_data.get("travel_time", 0)
+                probs.append(flood_prob_map.get((u, v, key), 0.0))
+            return total_time, float(np.mean(probs)) if probs else 0.0
+
+        orig_time, orig_flood = path_metrics(original_path, "travel_time")
+        alt_time, alt_flood = path_metrics(alternative_path, "flood_cost")
 
         return {
             "route_id": route_id,
@@ -184,6 +192,8 @@ def compute_affected_routes(
     """Which routes serve a stop inside a high-risk ward, given current
     flood_prob and threshold."""
     high_risk_wards = wards_gdf[wards_gdf["flood_prob"] >= threshold]
+    if high_risk_wards.empty:
+        return [], set()
     stops_joined = gpd.sjoin(
         stops_gdf,
         high_risk_wards[["ward", "flood_prob", "geometry"]],
