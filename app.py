@@ -1555,7 +1555,7 @@ elif page == "Route Optimization":
         label_visibility="collapsed",
     )
 
-    if map_view == "🗺 Flood Risk Map":
+    if map_view == "Flood Risk Map":
         st.caption("Nairobi ward flood risk · hover a ward for details")
         with st.spinner("Rendering flood risk map..."):
             risk_map = build_choropleth(nairobi, NAIROBI_LAT, NAIROBI_LON, zoom=11)
