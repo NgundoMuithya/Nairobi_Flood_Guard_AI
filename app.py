@@ -451,7 +451,7 @@ def load_road_graph():
     return ox.load_graphml(ROAD_GRAPH)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, max_entries=3, show_spinner=False)
 def get_live_routes(
     _G, _wards_gdf, _stops_df, _stop_times, _trips, alpha, threshold, fingerprint
 ):
@@ -637,7 +637,7 @@ def apply_horizon_rainfall(gdf, horizon_hours: int, use_cache: bool):
         ) from exc
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
+@st.cache_data(ttl=21600, max_entries=6, show_spinner=False)
 def get_open_meteo_ward_dataframe(
     cache_bust: int, skip_file_cache: bool, horizon_hours: int
 ):
@@ -931,7 +931,9 @@ with st.sidebar:
                         with st.expander("Raw AT response (debug)"):
                             st.json(response)
 
-                    # Log to session state so operator can review sends
+                    # Log to session state so operator can review sends.
+                    # Trimmed to the last 5 - that's all the UI ever shows,
+                    # so a long session shouldn't keep every send in memory.
                     if "sms_log" not in st.session_state:
                         st.session_state.sms_log = []
                     st.session_state.sms_log.append(
@@ -942,6 +944,7 @@ with st.sidebar:
                             "message": sms_body[:80] + "...",
                         }
                     )
+                    st.session_state.sms_log = st.session_state.sms_log[-5:]
 
                 except KeyError:
                     st.error(
@@ -1907,6 +1910,9 @@ elif page == "AI Assistant":
             )
             reply = response.choices[0].message.content
         st.session_state.messages.append({"role": "assistant", "content": reply})
+        # Cap history so a long conversation doesn't grow memory (or the
+        # Groq context sent on every turn) without bound.
+        st.session_state.messages = st.session_state.messages[-20:]
 
     # Render message history below the input
     for msg in st.session_state.get("messages", []):
